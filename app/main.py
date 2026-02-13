@@ -9,6 +9,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from PIL import Image, ImageOps
+
 from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -199,10 +201,11 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
             saved_content_type = "image/png"
             saved_name = f"{Path(original_name).stem}.png"
         else:
-            ocr_result = run_ocr(uploaded_bytes)
-            saved_bytes = uploaded_bytes
-            saved_content_type = content_type or None
-            saved_name = original_name
+            normalized_bytes, normalized_content_type, normalized_name = _normalize_upload_image(uploaded_bytes, original_name, content_type)
+            ocr_result = run_ocr(normalized_bytes)
+            saved_bytes = normalized_bytes
+            saved_content_type = normalized_content_type
+            saved_name = normalized_name
 
         extracted = extract_receipt_fields(ocr_result)
     except Exception as exc:
@@ -367,12 +370,25 @@ def list_merchants(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    search = query.strip()
-    stmt = select(Merchant.name)
-    if search:
-        stmt = stmt.where(Merchant.name.ilike(f"{search}%"))
+    search = query.strip().lower()
 
-    names = db.scalars(stmt.order_by(func.lower(Merchant.name)).limit(limit)).all()
+    stmt = select(Receipt.merchant).where(Receipt.merchant.is_not(None))
+    raw_names = db.scalars(stmt).all()
+
+    deduped: dict[str, str] = {}
+    for raw_name in raw_names:
+        name = (raw_name or "").strip()
+        if not name:
+            continue
+
+        key = name.lower()
+        if search and not key.startswith(search):
+            continue
+
+        if key not in deduped:
+            deduped[key] = name
+
+    names = [deduped[key] for key in sorted(deduped.keys())[:limit]]
     return {"merchants": names}
 
 
@@ -558,6 +574,40 @@ def _upsert_merchant(db: Session, name: str) -> None:
     existing = db.scalar(select(Merchant.id).where(func.lower(Merchant.name) == normalized.lower()))
     if existing is None:
         db.add(Merchant(name=normalized))
+
+
+def _normalize_upload_image(uploaded_bytes: bytes, original_name: str, content_type: str | None) -> tuple[bytes, str | None, str]:
+    """Normalize images so previews do not depend on EXIF orientation.
+
+    Many phone photos store the "real" pixels rotated and rely on EXIF orientation for display.
+    Browsers often honor EXIF, but PIL/OpenCV and some viewers might not. We transpose on upload
+    and re-encode to strip EXIF so OCR and UI see the same upright image.
+    """
+
+    try:
+        img = Image.open(io.BytesIO(uploaded_bytes))
+        img = ImageOps.exif_transpose(img)
+
+        ext = Path(original_name or '').suffix.lower()
+        is_png = (content_type or '').lower() == 'image/png' or ext == '.png'
+
+        buf = io.BytesIO()
+        if is_png:
+            # Preserve alpha if present.
+            img.save(buf, format='PNG', optimize=True)
+            return buf.getvalue(), 'image/png', f"{Path(original_name).stem}.png"
+
+        # Default: JPEG
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+        elif img.mode == 'L':
+            # Keep grayscale, but save as RGB for more consistent browser rendering.
+            img = img.convert('RGB')
+
+        img.save(buf, format='JPEG', quality=92, optimize=True, progressive=True)
+        return buf.getvalue(), 'image/jpeg', f"{Path(original_name).stem}.jpg"
+    except Exception:
+        return uploaded_bytes, content_type or None, original_name
 
 
 def _save_receipt_image(receipt_id: int, original_name: str | None, image_bytes: bytes) -> str:

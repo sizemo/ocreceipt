@@ -1,11 +1,19 @@
 import io
+import os
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
 import pytesseract
+
+try:
+    import cv2
+    import numpy as np
+except Exception:  # pragma: no cover
+    cv2 = None
+    np = None
 from dateutil import parser
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 import pypdfium2 as pdfium
 from pytesseract import Output
 
@@ -18,43 +26,165 @@ DATE_PATTERNS = [
 AMOUNT_TOKEN_PATTERN = re.compile(r"(\$?\s*[0-9]+(?:\.[0-9]{2}))(\s*%)?")
 COMMON_DIGIT_FIXES = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "B": "8"})
 MAX_PDF_OCR_PAGES = 4
+OCR_AUTO_CROP = os.getenv("OCR_AUTO_CROP", "true").strip().lower() == "true"
+OCR_DESKEW = os.getenv("OCR_DESKEW", "true").strip().lower() == "true"
+OCR_DESKEW_DEGREES = float(os.getenv("OCR_DESKEW_DEGREES", "5"))
+OCR_DESKEW_STEP = float(os.getenv("OCR_DESKEW_STEP", "0.5"))
+OCR_PERSPECTIVE = os.getenv("OCR_PERSPECTIVE", "true").strip().lower() == "true"
+
+
+
+
+def _ocr_quality_score(text: str, avg_conf: float) -> float:
+    low = (text or "").lower()
+    letters = sum(ch.isalpha() for ch in low)
+    digits = sum(ch.isdigit() for ch in low)
+    keywords = ("total", "tax", "subtotal", "amount", "visa", "mastercard", "cashier", "order")
+    hits = sum(1 for k in keywords if k in low)
+
+    score = float(avg_conf or 0.0)
+    score += min(35.0, letters / 55.0)
+    score += min(20.0, digits / 45.0)
+    score += hits * 10.0
+    return score
 
 
 def run_ocr(image_bytes: bytes) -> dict:
-    base_image = Image.open(io.BytesIO(image_bytes)).convert("L")
-    oriented = _orient_image(base_image)
+    base_image = Image.open(io.BytesIO(image_bytes))
+    base_image = ImageOps.exif_transpose(base_image).convert("L")
 
-    variants = _build_variants(oriented)
+    candidates: list[Image.Image] = [base_image]
+    if OCR_AUTO_CROP:
+        cropped = _auto_crop_receipt(base_image)
+        # Avoid duplicates
+        if cropped.size != base_image.size:
+            candidates.append(cropped)
+
     configs = ["--oem 3 --psm 6", "--oem 3 --psm 4", "--oem 3 --psm 11"]
+    number_configs = [
+        "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.$%",
+        "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.$%",
+    ]
 
-    best_pass = {"text": "", "avg_confidence": 0.0, "lines": []}
-    best_variant = variants[0]
+    best_overall: dict | None = None
+    best_overall_score = -1.0
 
-    for variant in variants:
-        for config in configs:
-            parsed = _ocr_with_confidence(variant, config)
-            if parsed["avg_confidence"] > best_pass["avg_confidence"]:
-                best_pass = parsed
-                best_variant = variant
+    for candidate in candidates:
+        oriented = _pick_best_rotation(candidate)
+        if OCR_PERSPECTIVE:
+            oriented = _perspective_correct(oriented)
+        oriented = _orient_image(oriented)
+        if OCR_DESKEW:
+            oriented = _deskew_small_angles(oriented)
 
-    top_pass = _ocr_region(best_variant, 0.0, 0.35, configs)
-    bottom_pass = _ocr_region(best_variant, 0.5, 1.0, configs)
+        variants = _build_variants(oriented)
 
-    return {
-        "text": best_pass["text"],
-        "lines": best_pass["lines"],
-        "avg_confidence": best_pass["avg_confidence"],
-        "top_text": top_pass["text"],
-        "top_lines": top_pass["lines"],
-        "top_confidence": top_pass["avg_confidence"],
-        "bottom_text": bottom_pass["text"],
-        "bottom_lines": bottom_pass["lines"],
-        "bottom_confidence": bottom_pass["avg_confidence"],
+        best_pass = {"text": "", "avg_confidence": 0.0, "lines": []}
+        best_score = -1.0
+        best_variant = variants[0]
+
+        for variant in variants:
+            for config in configs:
+                parsed = _ocr_with_confidence(variant, config)
+                score = _ocr_quality_score(parsed.get("text", ""), parsed.get("avg_confidence", 0.0))
+                if score > best_score:
+                    best_score = score
+                    best_pass = parsed
+                    best_variant = variant
+
+        top_pass = _ocr_region(best_variant, 0.0, 0.35, configs)
+        bottom_pass = _ocr_region(best_variant, 0.5, 1.0, configs)
+        bottom_numbers_pass = _ocr_region(best_variant, 0.55, 1.0, number_configs)
+
+        result = {
+            "text": best_pass["text"],
+            "lines": best_pass["lines"],
+            "avg_confidence": best_pass["avg_confidence"],
+            "top_text": top_pass["text"],
+            "top_lines": top_pass["lines"],
+            "top_confidence": top_pass["avg_confidence"],
+            "bottom_text": bottom_pass["text"],
+            "bottom_lines": bottom_pass["lines"],
+            "bottom_confidence": bottom_pass["avg_confidence"],
+            "bottom_numbers_text": bottom_numbers_pass["text"],
+            "bottom_numbers_lines": bottom_numbers_pass["lines"],
+            "bottom_numbers_confidence": bottom_numbers_pass["avg_confidence"],
+        }
+
+        overall_score = _ocr_quality_score(result.get("text", ""), result.get("avg_confidence", 0.0))
+        overall_score += 0.6 * _ocr_quality_score(result.get("top_text", ""), result.get("top_confidence", 0.0))
+        overall_score += 0.8 * _ocr_quality_score(result.get("bottom_text", ""), result.get("bottom_confidence", 0.0))
+        overall_score += 1.0 * _ocr_quality_score(result.get("bottom_numbers_text", ""), result.get("bottom_numbers_confidence", 0.0))
+
+        if overall_score > best_overall_score:
+            best_overall_score = overall_score
+            best_overall = result
+
+    return best_overall or {
+        "text": "",
+        "lines": [],
+        "avg_confidence": 0.0,
+        "top_text": "",
+        "top_lines": [],
+        "top_confidence": 0.0,
+        "bottom_text": "",
+        "bottom_lines": [],
+        "bottom_confidence": 0.0,
+        "bottom_numbers_text": "",
+        "bottom_numbers_lines": [],
+        "bottom_numbers_confidence": 0.0,
     }
 
 
 
 
+
+def _pick_best_rotation(image: Image.Image) -> Image.Image:
+    """Pick the best of 0/90/180/270 by running a cheap OCR confidence pass.
+
+    Tesseract confidence alone is often noisy; add text/keyword heuristics.
+    """
+
+    try:
+        rotations = [
+            image,
+            image.rotate(90, expand=True, fillcolor=255),
+            image.rotate(180, expand=True, fillcolor=255),
+            image.rotate(270, expand=True, fillcolor=255),
+        ]
+
+        keywords = ("total", "tax", "subtotal", "visa", "mastercard", "amount")
+
+        scored: list[tuple[float, Image.Image]] = []
+        for candidate in rotations:
+            work = candidate
+            if max(work.size) > 1100:
+                scale = 1100 / max(work.size)
+                work = work.resize((int(work.width * scale), int(work.height * scale)))
+
+            work = ImageOps.autocontrast(work)
+            thr = _otsu_threshold(work)
+            bin_img = work.point(lambda px: 0 if px < thr else 255, mode="1").convert("L")
+
+            parsed = _ocr_with_confidence(bin_img, config="--oem 3 --psm 6")
+            text = (parsed.get("text", "") or "").lower()
+
+            # Heuristic: more letters/digits and receipt keywords means likely correct rotation.
+            letters = sum(ch.isalpha() for ch in text)
+            digits = sum(ch.isdigit() for ch in text)
+            hits = sum(1 for k in keywords if k in text)
+
+            score = float(parsed.get("avg_confidence", 0.0))
+            score += min(35.0, letters / 55.0)
+            score += min(20.0, digits / 45.0)
+            score += hits * 8.0
+
+            scored.append((score, candidate))
+
+        best = max(scored, key=lambda t: t[0])[1]
+        return best
+    except Exception:
+        return image
 def run_ocr_pdf(pdf_bytes: bytes) -> dict:
     pages = _render_pdf_pages(pdf_bytes, max_pages=MAX_PDF_OCR_PAGES)
     if not pages:
@@ -133,16 +263,37 @@ def extract_receipt_fields(ocr_result: dict) -> dict:
     main_lines = _normalize_lines(ocr_result.get("text", ""))
     top_lines = _normalize_lines(ocr_result.get("top_text", ""))
     bottom_lines = _normalize_lines(ocr_result.get("bottom_text", ""))
+    bottom_number_lines = _normalize_lines(ocr_result.get("bottom_numbers_text", ""))
 
-    combined_lines = _dedupe_lines(top_lines + main_lines + bottom_lines)
+    combined_lines = _dedupe_lines(top_lines + main_lines + bottom_lines + bottom_number_lines)
     line_confidences = _build_line_confidence_map(
-        [*ocr_result.get("lines", []), *ocr_result.get("top_lines", []), *ocr_result.get("bottom_lines", [])]
+        [
+            *ocr_result.get("lines", []),
+            *ocr_result.get("top_lines", []),
+            *ocr_result.get("bottom_lines", []),
+            *ocr_result.get("bottom_numbers_lines", []),
+        ]
     )
 
     merchant, merchant_conf = parse_merchant(top_lines + combined_lines, line_confidences)
     purchase_date, date_conf = parse_date(top_lines + combined_lines, line_confidences)
     total_amount, total_conf = parse_total(bottom_lines + combined_lines, line_confidences)
     sales_tax_amount, tax_conf = parse_sales_tax(bottom_lines + combined_lines, line_confidences)
+
+    # Guardrail: sales tax should not be a large fraction of the total.
+    # This avoids misreading tax *rate* (e.g. 8.25%) as the tax *amount*.
+    if sales_tax_amount is not None and total_amount is not None:
+        if sales_tax_amount < Decimal('0') or sales_tax_amount > (total_amount * Decimal('0.25')):
+            sales_tax_amount = None
+            tax_conf = 0.0
+
+
+    subtotal_amount = _find_keyword_amount(_normalize_lines("\n".join(bottom_lines + combined_lines)), ["subtotal", "sub total"])
+    if sales_tax_amount is None and subtotal_amount is not None and total_amount is not None:
+        delta = total_amount - subtotal_amount
+        if delta >= Decimal("0") and delta <= (total_amount * Decimal("0.25")):
+            sales_tax_amount = delta
+            tax_conf = max(tax_conf, 40.0)
 
     extraction_confidence = _compute_overall_confidence(
         pass_conf=max(
@@ -175,14 +326,23 @@ def parse_merchant(lines: list[str], line_confidences: dict[str, float]) -> tupl
     if not lines:
         return None, 0.0
 
-    blacklist = ["invoice", "receipt", "order", "store", "thank", "date", "time", "cashier"]
+    blacklist = ["invoice", "receipt", "order", "store", "thank", "date", "time", "cashier", "join", "earn", "points", "rewards"]
     for line in lines[:12]:
         low = line.lower()
         if any(token in low for token in blacklist):
             continue
         if sum(ch.isalpha() for ch in line) < 3:
             continue
-        if sum(ch.isdigit() for ch in line) > 4:
+        digit_count = sum(ch.isdigit() for ch in line)
+        if digit_count > 8:
+            continue
+
+        # Allow trailing store numbers like "Taco Bell 027825" but store just the name.
+        candidate = re.sub(r"\s+[0-9]{4,8}$", "", line).strip()
+        if digit_count > 4 and candidate and sum(ch.isalpha() for ch in candidate) >= 3:
+            return candidate[:200], _line_confidence(line, line_confidences)
+
+        if digit_count > 4:
             continue
         return line[:200], _line_confidence(line, line_confidences)
 
@@ -247,7 +407,7 @@ def parse_total(lines: list[str], line_confidences: dict[str, float]) -> tuple[D
     tax = _find_keyword_amount(reversed_lines, ["sales tax", "state tax", "tax", "hst", "gst", "vat"])
 
     candidates: list[tuple[Decimal, float, float]] = []
-    for idx, line in enumerate(reversed_lines[:26]):
+    for idx, line in enumerate(reversed_lines[:80]):
         amount = _extract_amount_from_line(line, prefer_non_percent=True, prefer_rightmost=False)
         if amount is None:
             continue
@@ -301,6 +461,7 @@ def _safe_parse_date(value: str) -> date | None:
 
 def _extract_amount_candidates(line: str) -> list[dict]:
     normalized = _normalize_digits(line)
+    normalized = re.sub(r"(\d),(\d{2})(?!\d)", r"\1.\2", normalized)
     candidates: list[dict] = []
 
     for match in AMOUNT_TOKEN_PATTERN.finditer(normalized):
@@ -482,10 +643,13 @@ def _ocr_region(image: Image.Image, y_start_ratio: float, y_end_ratio: float, co
 
     region = image.crop((0, y0, width, y1))
     best = {"text": "", "avg_confidence": 0.0, "lines": []}
+    best_score = -1.0
     for config in configs:
         parsed = _ocr_with_confidence(region, config)
-        if parsed["avg_confidence"] > best["avg_confidence"]:
+        score = _ocr_quality_score(parsed.get("text", ""), parsed.get("avg_confidence", 0.0))
+        if score > best_score:
             best = parsed
+            best_score = score
     return best
 
 
@@ -510,13 +674,267 @@ def _orient_image(image: Image.Image) -> Image.Image:
     return image
 
 
+
+
+
+
+def _order_quad_points(pts: "np.ndarray") -> "np.ndarray":
+    # pts shape (4, 2)
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]  # top-left
+    rect[2] = pts[np.argmax(s)]  # bottom-right
+
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # top-right
+    rect[3] = pts[np.argmax(diff)]  # bottom-left
+    return rect
+
+
+def _perspective_correct(image: Image.Image) -> Image.Image:
+    """Warp the receipt to a flat rectangle if a 4-corner contour is found."""
+
+    if cv2 is None or np is None:
+        return image
+
+    try:
+        # Work on a resized copy for contour detection.
+        pil = image
+        orig_w, orig_h = pil.size
+        max_side = max(orig_w, orig_h)
+        scale = 1.0
+        if max_side > 1400:
+            scale = 1400.0 / max_side
+            pil = pil.resize((int(orig_w * scale), int(orig_h * scale)))
+
+        gray = np.array(pil)
+        if gray.ndim != 2:
+            gray = cv2.cvtColor(gray, cv2.COLOR_RGB2GRAY)
+
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blur, 60, 180)
+        edges = cv2.dilate(edges, None, iterations=2)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return image
+
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:8]
+        quad = None
+        for c in contours:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if len(approx) == 4:
+                quad = approx.reshape(4, 2).astype("float32")
+                break
+
+        if quad is None:
+            return image
+
+        rect = _order_quad_points(quad)
+        (tl, tr, br, bl) = rect
+
+        width_a = np.linalg.norm(br - bl)
+        width_b = np.linalg.norm(tr - tl)
+        max_w = int(max(width_a, width_b))
+
+        height_a = np.linalg.norm(tr - br)
+        height_b = np.linalg.norm(tl - bl)
+        max_h = int(max(height_a, height_b))
+
+        if max_w < 300 or max_h < 300:
+            return image
+
+        dst = np.array(
+            [
+                [0, 0],
+                [max_w - 1, 0],
+                [max_w - 1, max_h - 1],
+                [0, max_h - 1],
+            ],
+            dtype="float32",
+        )
+
+        M = cv2.getPerspectiveTransform(rect, dst)
+
+        # Warp using the same resized image we detected on, then scale back by running OCR variants anyway.
+        warped = cv2.warpPerspective(gray, M, (max_w, max_h), borderMode=cv2.BORDER_REPLICATE)
+        warped_pil = Image.fromarray(warped).convert("L")
+
+        return warped_pil
+    except Exception:
+        return image
+def _auto_crop_receipt(image: Image.Image) -> Image.Image:
+    """Best-effort crop to receipt content without extra deps (no OpenCV).
+
+    First tries a bright-region bbox (good for receipts on dark backgrounds),
+    then falls back to an edge-map bbox.
+    """
+
+    try:
+        work = image
+        if max(work.size) > 1800:
+            scale = 1800 / max(work.size)
+            work = work.resize((int(work.width * scale), int(work.height * scale)))
+
+        # 1) Bright-region bbox (receipt paper is typically the brightest object).
+        bright = ImageOps.autocontrast(work)
+        bright_mask = bright.point(lambda px: 255 if px > 210 else 0)
+        bbox = bright_mask.getbbox()
+
+        # 2) Fallback to edge bbox if the bright bbox looks wrong.
+        if not bbox or (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) < (work.width * work.height * 0.18):
+            edges = work.filter(ImageFilter.FIND_EDGES)
+            edges = ImageOps.autocontrast(edges)
+            edges = edges.point(lambda px: 255 if px > 48 else 0)
+            bbox = edges.getbbox()
+
+        if not bbox:
+            return image
+
+        x0, y0, x1, y1 = bbox
+        area = (x1 - x0) * (y1 - y0)
+        if area < (work.width * work.height * 0.18):
+            return image
+
+        pad = int(max(work.size) * 0.02)
+        x0 = max(0, x0 - pad)
+        y0 = max(0, y0 - pad)
+        x1 = min(work.width, x1 + pad)
+        y1 = min(work.height, y1 + pad)
+
+        if work.size != image.size:
+            sx = image.width / work.width
+            sy = image.height / work.height
+            x0 = int(x0 * sx)
+            x1 = int(x1 * sx)
+            y0 = int(y0 * sy)
+            y1 = int(y1 * sy)
+
+        return image.crop((x0, y0, x1, y1))
+    except Exception:
+        return image
+
+
+def _otsu_threshold(image: Image.Image) -> int:
+    # Image must be L mode.
+    hist = image.histogram()
+    total = sum(hist)
+    if total <= 0:
+        return 160
+
+    sum_total = 0
+    for i, h in enumerate(hist):
+        sum_total += i * h
+
+    sum_b = 0
+    w_b = 0
+    var_max = -1.0
+    threshold = 160
+
+    for i in range(256):
+        w_b += hist[i]
+        if w_b == 0:
+            continue
+        w_f = total - w_b
+        if w_f == 0:
+            break
+
+        sum_b += i * hist[i]
+        m_b = sum_b / w_b
+        m_f = (sum_total - sum_b) / w_f
+        var_between = w_b * w_f * (m_b - m_f) ** 2
+        if var_between > var_max:
+            var_max = var_between
+            threshold = i
+
+    return threshold
+
+
+def _deskew_small_angles(image: Image.Image) -> Image.Image:
+    """Deskew small angles by maximizing horizontal projection variance."""
+
+    try:
+        max_deg = max(0.5, float(OCR_DESKEW_DEGREES))
+        step = max(0.25, float(OCR_DESKEW_STEP))
+
+        work = image
+        if max(work.size) > 1200:
+            scale = 1200 / max(work.size)
+            work = work.resize((int(work.width * scale), int(work.height * scale)))
+
+        # Build a high-contrast binary for scoring.
+        enhanced = ImageOps.autocontrast(work)
+        thr = _otsu_threshold(enhanced)
+        binary = enhanced.point(lambda px: 0 if px < thr else 255)
+
+        angles = []
+        a = -max_deg
+        while a <= max_deg + 1e-9:
+            angles.append(round(a, 3))
+            a += step
+
+        best_angle = 0.0
+        best_score = -1.0
+
+        for angle in angles:
+            rotated = binary.rotate(angle, resample=Image.BICUBIC, expand=True, fillcolor=255)
+            w, h = rotated.size
+            pixels = rotated.tobytes()
+            row_sums = [0] * h
+            # Count dark pixels per row (byte < 128).
+            idx = 0
+            for y in range(h):
+                count = 0
+                row = pixels[idx:idx + w]
+                idx += w
+                # rot is L; 0 is black.
+                for b in row:
+                    if b < 128:
+                        count += 1
+                row_sums[y] = count
+
+            # Score by adjacent row difference (sharper lines => higher score).
+            score = 0
+            prev = row_sums[0] if row_sums else 0
+            for v in row_sums[1:]:
+                d = v - prev
+                score += d * d
+                prev = v
+
+            if score > best_score:
+                best_score = score
+                best_angle = angle
+
+        if abs(best_angle) < 0.01:
+            return image
+
+        # Apply to full-res image.
+        return image.rotate(best_angle, resample=Image.BICUBIC, expand=True, fillcolor=255)
+    except Exception:
+        return image
+
+
 def _build_variants(image: Image.Image) -> list[Image.Image]:
     upscaled = image.resize((image.width * 2, image.height * 2)) if min(image.size) < 1600 else image.copy()
+
     autocontrast = ImageOps.autocontrast(upscaled)
-    sharpened = autocontrast.filter(ImageFilter.SHARPEN)
-    denoised = autocontrast.filter(ImageFilter.MedianFilter(size=3))
+    equalized = ImageOps.equalize(autocontrast)
 
-    threshold_145 = autocontrast.point(lambda px: 0 if px < 145 else 255, mode="1")
-    threshold_170 = autocontrast.point(lambda px: 0 if px < 170 else 255, mode="1")
+    denoised = equalized.filter(ImageFilter.MedianFilter(size=3))
 
-    return [autocontrast, sharpened, denoised, threshold_145, threshold_170]
+    # High-pass style enhancement to make faint thermal text pop.
+    blurred = denoised.filter(ImageFilter.GaussianBlur(radius=1.2))
+    highpass = ImageChops.subtract(denoised, blurred)
+    highpass = ImageOps.autocontrast(highpass)
+
+    sharpened = denoised.filter(ImageFilter.UnsharpMask(radius=2, percent=165, threshold=3))
+
+    thr = _otsu_threshold(denoised)
+    threshold_otsu = denoised.point(lambda px: 0 if px < thr else 255, mode="1")
+
+    # Keep a couple fixed thresholds as fallbacks.
+    threshold_145 = denoised.point(lambda px: 0 if px < 145 else 255, mode="1")
+    threshold_170 = denoised.point(lambda px: 0 if px < 170 else 255, mode="1")
+
+    return [denoised, sharpened, highpass, threshold_otsu, threshold_145, threshold_170]
