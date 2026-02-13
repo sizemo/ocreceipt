@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 import pytesseract
 from dateutil import parser
 from PIL import Image, ImageFilter, ImageOps
+import pypdfium2 as pdfium
 from pytesseract import Output
 
 DATE_PATTERNS = [
@@ -16,6 +17,7 @@ DATE_PATTERNS = [
 
 AMOUNT_TOKEN_PATTERN = re.compile(r"(\$?\s*[0-9]+(?:\.[0-9]{2}))(\s*%)?")
 COMMON_DIGIT_FIXES = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "B": "8"})
+MAX_PDF_OCR_PAGES = 4
 
 
 def run_ocr(image_bytes: bytes) -> dict:
@@ -50,6 +52,82 @@ def run_ocr(image_bytes: bytes) -> dict:
         "bottom_confidence": bottom_pass["avg_confidence"],
     }
 
+
+
+
+def run_ocr_pdf(pdf_bytes: bytes) -> dict:
+    pages = _render_pdf_pages(pdf_bytes, max_pages=MAX_PDF_OCR_PAGES)
+    if not pages:
+        raise ValueError("PDF contains no renderable pages")
+
+    per_page_results: list[dict] = []
+    for page_image in pages:
+        page_buffer = io.BytesIO()
+        page_image.save(page_buffer, format="PNG")
+        per_page_results.append(run_ocr(page_buffer.getvalue()))
+
+    text_parts = [result.get("text", "") for result in per_page_results if result.get("text")]
+    all_lines = [line for result in per_page_results for line in result.get("lines", [])]
+
+    first = per_page_results[0]
+    last = per_page_results[-1]
+    avg_conf = sum(result.get("avg_confidence", 0.0) for result in per_page_results) / max(1, len(per_page_results))
+
+    return {
+        "text": "\n".join(text_parts),
+        "lines": all_lines,
+        "avg_confidence": round(avg_conf, 2),
+        "top_text": first.get("top_text", ""),
+        "top_lines": first.get("top_lines", []),
+        "top_confidence": first.get("top_confidence", 0.0),
+        "bottom_text": last.get("bottom_text", ""),
+        "bottom_lines": last.get("bottom_lines", []),
+        "bottom_confidence": last.get("bottom_confidence", 0.0),
+    }
+
+
+def render_pdf_preview_image(pdf_bytes: bytes) -> bytes:
+    pages = _render_pdf_pages(pdf_bytes, max_pages=1)
+    if not pages:
+        raise ValueError("PDF contains no renderable pages")
+
+    preview = io.BytesIO()
+    pages[0].save(preview, format="PNG")
+    return preview.getvalue()
+
+
+def _render_pdf_pages(pdf_bytes: bytes, *, max_pages: int) -> list[Image.Image]:
+    document = pdfium.PdfDocument(pdf_bytes)
+    rendered_pages: list[Image.Image] = []
+
+    try:
+        page_count = min(len(document), max_pages)
+        for index in range(page_count):
+            page = document[index]
+            bitmap = None
+            try:
+                bitmap = page.render(scale=2.4)
+                if hasattr(bitmap, "to_pil"):
+                    pil_image = bitmap.to_pil()
+                elif hasattr(bitmap, "to_pil_image"):
+                    pil_image = bitmap.to_pil_image()
+                else:
+                    raise RuntimeError("Unsupported PDF bitmap conversion")
+
+                rendered_pages.append(pil_image.convert("RGB"))
+            finally:
+                close_page = getattr(page, "close", None)
+                if callable(close_page):
+                    close_page()
+                close_bitmap = getattr(bitmap, "close", None) if bitmap is not None else None
+                if callable(close_bitmap):
+                    close_bitmap()
+    finally:
+        close_document = getattr(document, "close", None)
+        if callable(close_document):
+            close_document()
+
+    return rendered_pages
 
 def extract_receipt_fields(ocr_result: dict) -> dict:
     main_lines = _normalize_lines(ocr_result.get("text", ""))

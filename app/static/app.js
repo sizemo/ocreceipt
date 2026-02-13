@@ -201,8 +201,15 @@ function addFiles(fileList) {
     return;
   }
 
-  const imageFiles = Array.from(fileList).filter((file) => file.type.startsWith("image/"));
-  selectedFiles = [...selectedFiles, ...imageFiles];
+  const files = Array.from(fileList);
+  const supportedFiles = files.filter((file) => file.type.startsWith("image/") || file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+  const skipped = files.length - supportedFiles.length;
+
+  if (skipped > 0) {
+    appendStatus(`Skipped ${skipped} unsupported file(s). Only images and PDFs are allowed.`, "err");
+  }
+
+  selectedFiles = [...selectedFiles, ...supportedFiles];
   renderSelectedFiles();
 }
 
@@ -575,7 +582,7 @@ async function loadReceipts() {
   const admin = isAdmin();
   if (!rows.length) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="${admin ? 11 : 9}">No receipts found for current filters.</td>`;
+    tr.innerHTML = `<td class="no-results" colspan="${admin ? 11 : 9}">No receipts found for current filters.</td>`;
     receiptsBody.appendChild(tr);
     return;
   }
@@ -592,21 +599,21 @@ async function loadReceipts() {
         : '<span class="badge good">Reviewed</span>';
 
     const adminCells = admin
-      ? `<td><button class="secondary table-btn" type="button" data-edit-id="${row.id}">Edit</button></td>
-         <td><button class="danger table-btn" type="button" data-delete-id="${row.id}">Delete</button></td>`
+      ? `<td data-label="Edit"><button class="secondary table-btn" type="button" data-edit-id="${row.id}">Edit</button></td>
+         <td data-label="Delete"><button class="danger table-btn" type="button" data-delete-id="${row.id}">Delete</button></td>`
       : "";
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row.id}</td>
-      <td>${formatDate(row.purchase_date)}</td>
-      <td>${row.merchant || "-"}</td>
-      <td>${formatMoney(row.total_amount)}</td>
-      <td>${formatMoney(row.sales_tax_amount)}</td>
-      <td>${formatConfidence(row.extraction_confidence)}</td>
-      <td>${reviewCell}</td>
-      <td>${formatDate(row.created_at)}</td>
-      <td>${receiptCell}</td>
+      <td data-label="ID">${row.id}</td>
+      <td data-label="Date">${formatDate(row.purchase_date)}</td>
+      <td data-label="Merchant">${row.merchant || "-"}</td>
+      <td data-label="Total">${formatMoney(row.total_amount)}</td>
+      <td data-label="Sales Tax">${formatMoney(row.sales_tax_amount)}</td>
+      <td data-label="Confidence">${formatConfidence(row.extraction_confidence)}</td>
+      <td data-label="Review">${reviewCell}</td>
+      <td data-label="Created">${formatDate(row.created_at)}</td>
+      <td data-label="Receipt">${receiptCell}</td>
       ${adminCells}
     `;
     receiptsBody.appendChild(tr);

@@ -21,7 +21,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from .auth import create_session, delete_session, get_user_by_session_token, hash_password, verify_password
 from .database import Base, engine, get_db
 from .models import InstanceSetting, Merchant, Receipt, ReceiptImage, User, UserSession
-from .ocr import extract_receipt_fields, run_ocr
+from .ocr import extract_receipt_fields, render_pdf_preview_image, run_ocr, run_ocr_pdf
 from .schemas import (
     InstanceResetRequest,
     LoginRequest,
@@ -180,15 +180,30 @@ def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_
 
 @app.post("/receipts/upload", response_model=ReceiptOut)
 async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only image uploads are supported")
+    content_type = (file.content_type or "").lower()
+    original_name = file.filename or "receipt"
+    is_pdf = content_type == "application/pdf" or Path(original_name).suffix.lower() == ".pdf"
+    is_image = content_type.startswith("image/")
 
-    image_bytes = await file.read()
-    if not image_bytes:
+    if not is_image and not is_pdf:
+        raise HTTPException(status_code=400, detail="Only image and PDF uploads are supported")
+
+    uploaded_bytes = await file.read()
+    if not uploaded_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
     try:
-        ocr_result = run_ocr(image_bytes)
+        if is_pdf:
+            ocr_result = run_ocr_pdf(uploaded_bytes)
+            saved_bytes = render_pdf_preview_image(uploaded_bytes)
+            saved_content_type = "image/png"
+            saved_name = f"{Path(original_name).stem}.png"
+        else:
+            ocr_result = run_ocr(uploaded_bytes)
+            saved_bytes = uploaded_bytes
+            saved_content_type = content_type or None
+            saved_name = original_name
+
         extracted = extract_receipt_fields(ocr_result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"OCR failed: {exc}") from exc
@@ -210,8 +225,8 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
         db.add(receipt)
         db.flush()
 
-        saved_filename = _save_receipt_image(receipt.id, file.filename, image_bytes)
-        db.add(ReceiptImage(receipt_id=receipt.id, stored_filename=saved_filename, content_type=file.content_type))
+        saved_filename = _save_receipt_image(receipt.id, saved_name, saved_bytes)
+        db.add(ReceiptImage(receipt_id=receipt.id, stored_filename=saved_filename, content_type=saved_content_type))
 
         if merchant_name:
             _upsert_merchant(db, merchant_name)

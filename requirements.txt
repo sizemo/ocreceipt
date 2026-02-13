@@ -7,3 +7,4 @@ pydantic==2.10.6
 pytesseract==0.3.13
 Pillow==11.1.0
 python-dateutil==2.9.0.post0
+pypdfium2==4.30.0

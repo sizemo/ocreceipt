@@ -3,7 +3,7 @@
 A self-hosted Dockerized app that lets you upload receipt images, runs OCR, extracts key tax fields, and stores them in PostgreSQL.
 
 ## Major features
-- Multi-file receipt uploads with OCR extraction
+- Multi-file receipt uploads with OCR extraction (images and PDFs)
 - Logged receipt table with filters (date range, merchant, review status)
 - Manual correction workflow and mark-reviewed actions
 - Receipt image preview and CSV export

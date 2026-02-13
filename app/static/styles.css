@@ -575,6 +575,78 @@ tr:hover td {
   }
 }
 
+
+@media (max-width: 980px) {
+  .table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  table {
+    min-width: 100%;
+  }
+
+  table thead {
+    display: none;
+  }
+
+  table tbody,
+  table tr,
+  table td {
+    display: block;
+    width: 100%;
+  }
+
+  table tbody tr {
+    margin-bottom: 0.68rem;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface-strong) 88%, transparent);
+    overflow: hidden;
+  }
+
+  table tbody td {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.56rem 0.64rem;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+  }
+
+  table tbody td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-weight: 620;
+    text-align: left;
+  }
+
+  table tbody td:last-child {
+    border-bottom: 0;
+  }
+
+  .no-results {
+    text-align: left;
+  }
+
+  .no-results::before {
+    content: none;
+  }
+
+  td[data-label="Review"] .review-cell,
+  td[data-label="Actions"] {
+    justify-content: flex-end;
+  }
+
+  td[data-label="Actions"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+}
+
 @media (max-width: 760px) {
   .container {
     margin: 1rem auto 1.5rem;

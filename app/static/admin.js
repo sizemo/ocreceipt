@@ -164,7 +164,7 @@ async function loadAdminUsers() {
 
     const passwordAction = `<button class=\"secondary table-btn\" data-password-user-id=\"${user.id}\" type=\"button\">Set Password</button>`;
 
-    tr.innerHTML = `<td>${user.id}</td><td>${user.username}</td><td>${user.role}</td><td>${passwordAction} ${deleteAction}</td>`;
+    tr.innerHTML = `<td data-label="ID">${user.id}</td><td data-label="Username">${user.username}</td><td data-label="Role">${user.role}</td><td data-label="Actions">${passwordAction} ${deleteAction}</td>`;
     adminUsersBody.appendChild(tr);
   });
 
