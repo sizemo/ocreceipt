@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en" data-theme="midnight">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Receipt OCR Admin</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section id="auth-section" class="card auth-card">
+        <h1>Admin Access</h1>
+        <p>Sign in with an admin account.</p>
+        <form id="login-form" class="auth-form" autocomplete="off">
+          <label>
+            Username
+            <input id="login-username" type="text" required />
+          </label>
+          <label>
+            Password
+            <input id="login-password" type="password" required />
+          </label>
+          <button type="submit">Sign in</button>
+        </form>
+        <small id="auth-error" class="err-text"></small>
+      </section>
+
+      <div id="admin-shell" hidden>
+        <header class="topbar">
+          <div>
+            <h1>Admin Panel</h1>
+            <p id="session-label">Signed in</p>
+          </div>
+          <div class="topbar-actions">
+            <div class="menu-wrap">
+              <button id="menu-toggle" type="button" class="secondary">Menu</button>
+              <div id="user-menu" class="menu" hidden>
+                <a href="/" class="menu-item">Receipts</a>
+                <label class="menu-theme" for="theme-select">Theme
+                  <select id="theme-select" class="menu-theme-select">
+                    <option value="light">Light</option>
+                    <option value="midnight">Midnight Blue</option>
+                    <option value="oled">OLED Black</option>
+                  </select>
+                </label>
+                <button id="logout-btn" type="button" class="menu-item danger-text">Logout</button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <section class="card">
+          <h2>Users</h2>
+          <div class="admin-grid">
+            <div class="admin-box">
+              <h3>Create User</h3>
+              <form id="create-user-form" class="admin-form" autocomplete="off">
+                <label>Username <input id="new-user-username" type="text" required /></label>
+                <label>Password <input id="new-user-password" type="password" required /></label>
+                <label>
+                  Role
+                  <select id="new-user-role">
+                    <option value="view">View</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </label>
+                <button type="submit">Create user</button>
+              </form>
+            </div>
+
+            <div class="admin-box">
+              <h3>Existing Users</h3>
+              <table class="compact-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Username</th>
+                    <th>Role</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-users-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Settings</h2>
+          <form id="settings-form" class="admin-form">
+            <label>
+              Default Currency (ISO 4217)
+              <input id="default-currency" type="text" maxlength="3" required />
+            </label>
+            <button type="submit">Save settings</button>
+          </form>
+        </section>
+
+        <section class="card">
+          <h2>Danger Zone</h2>
+          <p>Reset the entire instance data (receipts, merchants, users except current admin).</p>
+          <button id="reset-instance-btn" type="button" class="danger">Reset instance</button>
+        </section>
+
+        <small id="admin-message"></small>
+      </div>
+    </main>
+
+    <script src="/static/admin.js" defer></script>
+  </body>
+</html>

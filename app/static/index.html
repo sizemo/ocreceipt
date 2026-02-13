@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en" data-theme="midnight">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Receipt OCR Logger</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <section id="auth-section" class="card auth-card">
+        <h1>Receipt OCR Logger</h1>
+        <p>Sign in to access your instance.</p>
+        <form id="login-form" class="auth-form" autocomplete="off">
+          <label>
+            Username
+            <input id="login-username" type="text" required />
+          </label>
+          <label>
+            Password
+            <input id="login-password" type="password" required />
+          </label>
+          <button id="login-btn" type="submit">Sign in</button>
+        </form>
+        <small id="auth-error" class="err-text"></small>
+      </section>
+
+      <div id="app-shell" hidden>
+        <header class="topbar">
+          <div>
+            <h1>Receipt OCR Logger</h1>
+            <p id="session-label">Signed in</p>
+          </div>
+          <div class="topbar-actions">
+            <div class="menu-wrap">
+              <button id="menu-toggle" type="button" class="secondary">Menu</button>
+              <div id="user-menu" class="menu" hidden>
+                <a id="admin-link" href="/admin-panel" class="menu-item" hidden>Admin Panel</a>
+                <label class="menu-theme" for="theme-select">Theme
+                  <select id="theme-select" class="menu-theme-select">
+                    <option value="light">Light</option>
+                    <option value="midnight">Midnight Blue</option>
+                    <option value="oled">OLED Black</option>
+                  </select>
+                </label>
+                <button id="logout-btn" type="button" class="menu-item danger-text">Logout</button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <section id="upload-card" class="card uploader admin-only">
+          <div id="dropzone" class="dropzone" tabindex="0">
+            <p><strong>Drag and drop receipt images here</strong></p>
+            <p>or</p>
+            <label class="button" for="file-input">Choose files</label>
+            <input id="file-input" type="file" accept="image/*" multiple />
+            <small>Multiple files supported.</small>
+          </div>
+          <div class="actions upload-actions">
+            <button id="upload-btn" type="button">Upload selected files</button>
+          </div>
+          <ul id="upload-list" class="upload-list"></ul>
+        </section>
+
+        <section class="card">
+          <div class="table-header">
+            <h2>Logged Receipts</h2>
+            <div class="table-actions">
+              <button id="refresh-btn" type="button" class="secondary">Refresh</button>
+              <a class="button secondary" href="/receipts/export">Export CSV</a>
+            </div>
+          </div>
+
+          <div class="table-filters">
+            <label>
+              Date From
+              <input id="filter-date-from" type="date" />
+            </label>
+            <label>
+              Date To
+              <input id="filter-date-to" type="date" />
+            </label>
+            <label>
+              Merchant
+              <input id="filter-merchant" type="text" list="merchant-filter-list" placeholder="Any merchant" />
+              <datalist id="merchant-filter-list"></datalist>
+            </label>
+            <label>
+              Review Status
+              <select id="filter-review">
+                <option value="all">All</option>
+                <option value="reviewed">Reviewed</option>
+                <option value="needs_review">Needs Review</option>
+              </select>
+            </label>
+            <div class="filter-actions">
+              <button id="apply-filters-btn" type="button" class="secondary">Apply filters</button>
+              <button id="clear-filters-btn" type="button" class="secondary">Clear</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Date</th>
+                  <th>Merchant</th>
+                  <th>Total</th>
+                  <th>Sales Tax</th>
+                  <th>Confidence</th>
+                  <th>Review</th>
+                  <th>Created</th>
+                  <th>Receipt</th>
+                  <th class="admin-only">Edit</th>
+                  <th class="admin-only">Delete</th>
+                </tr>
+              </thead>
+              <tbody id="receipts-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <dialog id="receipt-modal" class="receipt-modal">
+      <div class="modal-head">
+        <h3>Receipt Preview</h3>
+        <button id="close-modal-btn" type="button" class="secondary">Close</button>
+      </div>
+      <img id="receipt-modal-image" alt="Uploaded receipt preview" />
+    </dialog>
+
+    <dialog id="edit-modal" class="receipt-modal admin-only">
+      <form id="edit-form" class="edit-form" autocomplete="off">
+        <div class="modal-head">
+          <h3>Edit Receipt</h3>
+          <button id="cancel-edit-btn" type="button" class="secondary">Cancel</button>
+        </div>
+
+        <input id="edit-id" type="hidden" />
+
+        <label for="edit-date">Date</label>
+        <input id="edit-date" type="date" />
+
+        <label for="edit-merchant">Merchant</label>
+        <div class="typeahead-wrap">
+          <input id="edit-merchant" type="text" maxlength="200" placeholder="Merchant" />
+          <div id="merchant-suggestions" class="suggestions"></div>
+        </div>
+
+        <label for="edit-total">Total Amount</label>
+        <input id="edit-total" type="number" step="0.01" min="0" placeholder="0.00" />
+
+        <label for="edit-tax">Sales Tax Amount</label>
+        <input id="edit-tax" type="number" step="0.01" min="0" placeholder="0.00" />
+
+        <div class="actions">
+          <button id="save-edit-btn" type="submit">Save changes</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

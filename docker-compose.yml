@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16
+    container_name: receipt_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: receipts
+      POSTGRES_USER: receipts_user
+      POSTGRES_PASSWORD: receipts_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    container_name: receipt_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://receipts_user:receipts_password@db:5432/receipts
+      UPLOADS_DIR: /app/uploads
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD in .env}
+      SESSION_COOKIE_NAME: ocreceipt_session
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-strict}
+      FORCE_HTTPS: ${FORCE_HTTPS:-true}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      PROXY_TRUSTED_HOSTS: ${PROXY_TRUSTED_HOSTS:-127.0.0.1,::1}
+      LOGIN_RATE_LIMIT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ATTEMPTS:-8}
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+      LOGIN_RATE_LIMIT_BLOCK_SECONDS: ${LOGIN_RATE_LIMIT_BLOCK_SECONDS:-900}
+    volumes:
+      - receipt_uploads:/app/uploads
+    ports:
+      - "${APP_PORT:-8780}:8000"
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
+  receipt_uploads:
