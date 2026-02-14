@@ -506,6 +506,17 @@ tr:hover td {
   border: 1px solid var(--border);
 }
 
+#edit-modal-image {
+  width: 100%;
+  height: auto;
+  max-height: 42vh;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  margin: 0.45rem 0 0.15rem;
+  cursor: zoom-in;
+}
+
 .typeahead-wrap {
   position: relative;
 }

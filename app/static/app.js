@@ -32,6 +32,8 @@ const editMerchantInput = document.getElementById("edit-merchant");
 const merchantSuggestions = document.getElementById("merchant-suggestions");
 const editTotalInput = document.getElementById("edit-total");
 const editTaxInput = document.getElementById("edit-tax");
+const editModalImage = document.getElementById("edit-modal-image");
+const editModalImageHint = document.getElementById("edit-modal-image-hint");
 
 const filterDateFromInput = document.getElementById("filter-date-from");
 const filterDateToInput = document.getElementById("filter-date-to");
@@ -444,6 +446,20 @@ receiptModal.addEventListener("click", (event) => {
   }
 });
 
+
+function clearEditPreview() {
+  if (!editModalImage) return;
+  editModalImage.src = "";
+  editModalImage.hidden = true;
+  if (editModalImageHint) editModalImageHint.hidden = true;
+}
+
+if (editModalImage) {
+  editModalImage.addEventListener("click", () => {
+    if (editModalImage.src) viewReceipt(editModalImage.src);
+  });
+}
+
 function openEditModal(receiptId) {
   if (!isAdmin()) return;
   const row = receiptRows.find((item) => item.id === receiptId);
@@ -454,18 +470,31 @@ function openEditModal(receiptId) {
   editMerchantInput.value = row.merchant || "";
   editTotalInput.value = row.total_amount ?? "";
   editTaxInput.value = row.sales_tax_amount ?? "";
+  if (editModalImage) {
+    if (row.image_url) {
+      editModalImage.src = row.image_url;
+      editModalImage.hidden = false;
+      if (editModalImageHint) editModalImageHint.hidden = false;
+    } else {
+      editModalImage.src = "";
+      editModalImage.hidden = true;
+      if (editModalImageHint) editModalImageHint.hidden = true;
+    }
+  }
   hideMerchantSuggestions();
   editModal.showModal();
 }
 
 cancelEditBtn.addEventListener("click", () => {
   hideMerchantSuggestions();
+  clearEditPreview();
   editModal.close();
 });
 
 editModal.addEventListener("click", (event) => {
   if (event.target === editModal) {
     hideMerchantSuggestions();
+    clearEditPreview();
     editModal.close();
   }
 });
@@ -547,6 +576,7 @@ async function saveEdit(event) {
   if (!response.ok) return;
   appendStatus(`Updated receipt #${receiptId}.`, "ok");
   hideMerchantSuggestions();
+  clearEditPreview();
   editModal.close();
   await loadMerchantFilterOptions();
   await loadReceipts();
