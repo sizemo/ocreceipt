@@ -1,6 +1,8 @@
-# Receipt OCR Tax Logger
+# OCReceipt
 
 A self-hosted Dockerized app that lets you upload receipt images, runs OCR, extracts key tax fields, and stores them in PostgreSQL.
+
+This helps you track sales tax expenditures if you're itemizing US taxes in a state with no income taxes or if you pay less in income taxes than in sales taxes. Or if you just want to track sales taxes to know if you pay more income than sales taxes! The possibilities are limitless when the limit is three.
 
 ## Major features
 - Multi-file receipt uploads with OCR extraction (images and PDFs)
