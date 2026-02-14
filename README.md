@@ -87,6 +87,7 @@ If no admin exists and `DEFAULT_ADMIN_PASSWORD` is weak (<12 chars or common def
 - `POST /admin/reset-instance`
 
 ## Reverse proxy + security env
+
 Recommended for production:
 - `SESSION_COOKIE_SECURE=true`
 - `SESSION_COOKIE_SAMESITE=strict`
@@ -96,6 +97,22 @@ Recommended for production:
 - `LOGIN_RATE_LIMIT_ATTEMPTS=8`
 - `LOGIN_RATE_LIMIT_WINDOW_SECONDS=300`
 - `LOGIN_RATE_LIMIT_BLOCK_SECONDS=900`
+
+
+### Local HTTP (no TLS)
+If you access the app over `http://` (for example, `http://localhost:8780`), you must disable secure cookies or the browser will not store the session cookie and login will appear to do nothing.
+
+Use:
+
+```env
+FORCE_HTTPS=false
+SESSION_COOKIE_SECURE=false
+```
+
+When running behind a TLS-terminating reverse proxy (recommended), keep:
+- `FORCE_HTTPS=true`
+- `SESSION_COOKIE_SECURE=true`
+
 
 ### Domain + allowed hosts
 Yes: if you want domain access, add that domain to `ALLOWED_HOSTS` in your `.env` (or compose environment).
@@ -117,3 +134,21 @@ Security middleware includes:
 - Uploaded images are persisted in Docker volume `receipt_uploads`.
 - Default currency is configurable in Admin Panel and used in table formatting.
 - Reset Instance keeps the currently logged-in admin but clears receipts/merchants/other users and uploaded images.
+
+
+## Password recovery
+If the admin forgets their password, there is no email-based reset (this is intentionally offline/self-hosted).
+
+Recovery options:
+- If you still have another admin account, sign in and use the Admin Panel to change the password.
+- If you have shell access to the host, run the break-glass reset tool inside the container.
+
+Break-glass reset (recommended: avoid shell history by using stdin):
+
+```bash
+printf '%s' 'A-NEW-LONG-PASSWORD-HERE' | docker compose exec -T api python -m app.reset_password_cli --username admin --stdin
+```
+
+Notes:
+- This updates the password hash in the database and invalidates existing sessions for that user.
+- `DEFAULT_ADMIN_PASSWORD` is only used to bootstrap the first admin if none exists; changing it later will not overwrite an existing admin password.

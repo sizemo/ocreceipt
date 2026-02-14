@@ -6,6 +6,25 @@ const loginPasswordInput = document.getElementById("login-password");
 const authError = document.getElementById("auth-error");
 const sessionLabel = document.getElementById("session-label");
 
+
+
+function bindPasswordToggles(root = document) {
+  root.querySelectorAll("button[data-toggle-password][data-target]").forEach((button) => {
+    if (button.dataset.bound === "true") return;
+    button.dataset.bound = "true";
+
+    button.addEventListener("click", () => {
+      const targetId = button.dataset.target;
+      const input = document.getElementById(targetId);
+      if (!input) return;
+
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.textContent = show ? "Hide" : "Show";
+      button.setAttribute("aria-pressed", String(show));
+    });
+  });
+}
 const menuToggle = document.getElementById("menu-toggle");
 const userMenu = document.getElementById("user-menu");
 const themeSelect = document.getElementById("theme-select");
@@ -16,6 +35,11 @@ const adminMessage = document.getElementById("admin-message");
 const createUserForm = document.getElementById("create-user-form");
 const newUserUsernameInput = document.getElementById("new-user-username");
 const newUserPasswordInput = document.getElementById("new-user-password");
+const setPasswordModal = document.getElementById("set-password-modal");
+const setPasswordForm = document.getElementById("set-password-form");
+const setPasswordInput = document.getElementById("set-password-input");
+const setPasswordUser = document.getElementById("set-password-user");
+const closeSetPasswordBtn = document.getElementById("close-set-password");
 const newUserRoleSelect = document.getElementById("new-user-role");
 
 const settingsForm = document.getElementById("settings-form");
@@ -41,6 +65,8 @@ function setTheme(theme) {
   const saved = localStorage.getItem("theme");
   setTheme(saved || "midnight");
 })();
+
+bindPasswordToggles();
 
 if (themeSelect) {
   themeSelect.addEventListener("change", () => {
@@ -133,6 +159,12 @@ loginForm.addEventListener("submit", async (event) => {
 
   loginPasswordInput.value = "";
   await initializeAdmin();
+  if (!currentUser) {
+    const isHttp = window.location && window.location.protocol === "http:";
+    authError.textContent = isHttp
+      ? "Login succeeded but your session could not be established. This often means SESSION_COOKIE_SECURE=true while using http://. Use https:// via your reverse proxy, or set SESSION_COOKIE_SECURE=false for local http."
+      : "Login succeeded but your session could not be established. Check reverse proxy forwarded headers and cookie settings.";
+  }
 });
 
 logoutBtn.addEventListener("click", async () => {
@@ -186,24 +218,15 @@ async function loadAdminUsers() {
   });
 
   adminUsersBody.querySelectorAll("button[data-password-user-id]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       const userId = Number(button.dataset.passwordUserId);
-      const newPassword = window.prompt(`Enter new password for user #${userId}:`);
-      if (!newPassword) return;
+      if (!userId) return;
 
-      const response = await apiFetch(`/admin/users/${userId}/password`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: newPassword }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        setAdminMessage(`Password update failed: ${data.detail || response.status}`, true);
-        return;
-      }
-
-      setAdminMessage(`Password updated for user #${userId}.`);
+      setPasswordUser.textContent = `#${userId}`;
+      setPasswordInput.value = "";
+      setPasswordModal.dataset.userId = String(userId);
+      bindPasswordToggles(setPasswordModal);
+      setPasswordModal.showModal();
     });
   });
 }
@@ -291,3 +314,38 @@ async function initializeAdmin() {
 }
 
 initializeAdmin();
+
+
+if (closeSetPasswordBtn) {
+  closeSetPasswordBtn.addEventListener("click", () => {
+    setPasswordModal.close();
+  });
+}
+
+if (setPasswordForm) {
+  setPasswordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const userId = Number(setPasswordModal.dataset.userId || "0");
+    const newPassword = setPasswordInput.value;
+    if (!userId) return;
+    if (!newPassword || newPassword.length < 12) {
+      setAdminMessage("Password must be at least 12 characters.", true);
+      return;
+    }
+
+    const response = await apiFetch(`/admin/users/${userId}/password`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: newPassword }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      setAdminMessage(`Password update failed: ${data.detail || response.status}`, true);
+      return;
+    }
+
+    setAdminMessage(`Password updated for user #${userId}.`);
+    setPasswordModal.close();
+  });
+}

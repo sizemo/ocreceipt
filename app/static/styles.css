@@ -320,6 +320,27 @@ select {
   color: var(--text);
 }
 
+
+.password-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-field input {
+  padding-right: 5.1rem;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.34rem 0.6rem;
+  font-size: 0.82rem;
+  border-radius: 10px;
+}
+
 input:focus,
 select:focus {
   outline: none;

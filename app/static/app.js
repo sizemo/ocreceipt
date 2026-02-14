@@ -60,10 +60,32 @@ function setTheme(theme) {
   if (themeSelect) themeSelect.value = normalized;
 }
 
+
+
+function bindPasswordToggles(root = document) {
+  root.querySelectorAll("button[data-toggle-password][data-target]").forEach((button) => {
+    if (button.dataset.bound === "true") return;
+    button.dataset.bound = "true";
+
+    button.addEventListener("click", () => {
+      const targetId = button.dataset.target;
+      const input = document.getElementById(targetId);
+      if (!input) return;
+
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.textContent = show ? "Hide" : "Show";
+      button.setAttribute("aria-pressed", String(show));
+    });
+  });
+}
+
 (function initTheme() {
   const saved = localStorage.getItem("theme");
   setTheme(saved || "midnight");
 })();
+
+bindPasswordToggles();
 
 if (themeSelect) {
   themeSelect.addEventListener("change", () => {
@@ -184,6 +206,12 @@ loginForm.addEventListener("submit", async (event) => {
 
   loginPasswordInput.value = "";
   await initializeAuthenticatedApp();
+  if (!currentUser) {
+    const isHttp = window.location && window.location.protocol === "http:";
+    authError.textContent = isHttp
+      ? "Login succeeded but your session could not be established. This often means SESSION_COOKIE_SECURE=true while using http://. Use https:// via your reverse proxy, or set SESSION_COOKIE_SECURE=false for local http."
+      : "Login succeeded but your session could not be established. Check reverse proxy forwarded headers and cookie settings.";
+  }
 });
 
 logoutBtn.addEventListener("click", async () => {
