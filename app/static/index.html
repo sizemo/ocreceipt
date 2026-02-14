@@ -142,8 +142,8 @@
           <button id="cancel-edit-btn" type="button" class="secondary">Cancel</button>
         </div>
 
-        <img id="edit-modal-image" alt="Receipt preview for editing" hidden />
-        <small id="edit-modal-image-hint" class="muted" hidden>Click the image to zoom.</small>
+        <div class="edit-modal-grid">
+          <div class="edit-modal-main">
 
         <input id="edit-id" type="hidden" />
 
@@ -164,6 +164,13 @@
 
         <div class="actions">
           <button id="save-edit-btn" type="submit">Save changes</button>
+        </div>
+
+          </div>
+          <aside class="edit-modal-aside">
+            <img id="edit-modal-image" alt="Receipt preview for editing" hidden />
+            <small id="edit-modal-image-hint" class="muted" hidden>Click the image to zoom.</small>
+          </aside>
         </div>
       </form>
     </dialog>

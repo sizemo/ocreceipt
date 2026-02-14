@@ -54,15 +54,30 @@ function normalizeTheme(theme) {
   return "midnight";
 }
 
+
+
+async function updateMyThemePreference(theme) {
+  if (!currentUser) return;
+  try {
+    await apiFetch("/users/me/theme", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ theme }),
+    });
+  } catch {
+    // Non-fatal; keep local preference.
+  }
+}
 function setTheme(theme) {
   const normalized = normalizeTheme(theme);
   document.documentElement.setAttribute("data-theme", normalized);
-  localStorage.setItem("theme", normalized);
+  localStorage.setItem("theme:last", normalized);
+  if (currentUser?.username) localStorage.setItem(`theme:user:${currentUser.username}`, normalized);
   if (themeSelect) themeSelect.value = normalized;
 }
 
 (function initTheme() {
-  const saved = localStorage.getItem("theme");
+  const saved = localStorage.getItem("theme:last");
   setTheme(saved || "midnight");
 })();
 
@@ -71,6 +86,7 @@ bindPasswordToggles();
 if (themeSelect) {
   themeSelect.addEventListener("change", () => {
     setTheme(themeSelect.value);
+    updateMyThemePreference(themeSelect.value);
     closeMenu();
   });
 }
@@ -127,6 +143,9 @@ async function refreshSession() {
     }
 
     currentUser = data;
+    if (data.theme) setTheme(data.theme);
+    localStorage.setItem("theme:last", normalizeTheme(data.theme || "midnight"));
+    localStorage.setItem(`theme:user:${data.username}`, normalizeTheme(data.theme || "midnight"));
     sessionLabel.textContent = `Signed in as ${data.username} (admin)`;
     showAdmin();
     return true;

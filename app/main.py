@@ -35,6 +35,7 @@ from .schemas import (
     UserCreate,
     UserOut,
     UserPasswordUpdate,
+    ThemeUpdate,
 )
 
 app = FastAPI(title="Receipt OCR API", version="1.0.0")
@@ -170,10 +171,25 @@ def auth_me(user: User = Depends(get_current_user), db: Session = Depends(get_db
         "id": user.id,
         "username": user.username,
         "role": user.role,
+        "theme": user.theme_preference or "midnight",
         "default_currency": setting.default_currency,
     }
 
 
+
+
+@app.patch("/users/me/theme")
+def update_my_theme(payload: ThemeUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    theme = (payload.theme or "").strip().lower()
+    if theme == "dark":
+        theme = "midnight"
+    if theme not in {"light", "midnight", "oled"}:
+        raise HTTPException(status_code=400, detail="Invalid theme")
+
+    user.theme_preference = theme
+    db.add(user)
+    db.commit()
+    return {"theme": theme}
 @app.get("/settings", response_model=SettingsOut)
 def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_db)):
     setting = _get_or_create_settings(db)
@@ -649,6 +665,8 @@ def _ensure_schema() -> None:
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS extraction_confidence NUMERIC(5,2)"))
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference TEXT"))
+
 
 
 def _get_or_create_settings(db: Session) -> InstanceSetting:

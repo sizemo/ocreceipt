@@ -152,3 +152,7 @@ printf '%s' 'A-NEW-LONG-PASSWORD-HERE' | docker compose exec -T api python -m ap
 Notes:
 - This updates the password hash in the database and invalidates existing sessions for that user.
 - `DEFAULT_ADMIN_PASSWORD` is only used to bootstrap the first admin if none exists; changing it later will not overwrite an existing admin password.
+
+
+## Theme preference
+Theme selection (Light/Midnight Blue/OLED Black) is stored per user in the database and is applied on login.

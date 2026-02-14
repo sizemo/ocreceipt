@@ -52,6 +52,11 @@ class UserPasswordUpdate(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
 
+class ThemeUpdate(BaseModel):
+    theme: str = Field(min_length=3, max_length=32)
+
+
+
 class SettingsOut(BaseModel):
     default_currency: str
 

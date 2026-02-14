@@ -61,6 +61,19 @@
   background: #000000;
 }
 
+
+
+:root[data-theme="oled"] input,
+:root[data-theme="oled"] select,
+:root[data-theme="oled"] .typeahead-wrap input {
+  border-color: #2a2a2a;
+}
+
+:root[data-theme="oled"] input:focus,
+:root[data-theme="oled"] select:focus {
+  border-color: #3a3a3a;
+  box-shadow: 0 0 0 3px rgb(77 163 255 / 22%);
+}
 * {
   box-sizing: border-box;
 }
@@ -141,6 +154,10 @@ small {
 .edit-form {
   display: grid;
   gap: 0.72rem;
+}
+
+#edit-form {
+  gap: 0;
 }
 
 .auth-form {
@@ -489,6 +506,32 @@ tr:hover td {
   background: rgb(0 0 0 / 70%);
 }
 
+.edit-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr minmax(240px, 360px);
+  gap: 0.95rem;
+  align-items: start;
+}
+
+.edit-modal-main {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.edit-modal-aside {
+  display: grid;
+  gap: 0.35rem;
+}
+
+@media (max-width: 860px) {
+  .edit-modal-grid {
+    grid-template-columns: 1fr;
+  }
+  #edit-modal-image {
+    max-height: 52vh;
+  }
+}
+
 .modal-head {
   display: flex;
   justify-content: space-between;
@@ -509,7 +552,7 @@ tr:hover td {
 #edit-modal-image {
   width: 100%;
   height: auto;
-  max-height: 42vh;
+  max-height: 68vh;
   object-fit: contain;
   border-radius: 12px;
   border: 1px solid var(--border);

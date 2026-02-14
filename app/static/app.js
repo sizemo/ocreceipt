@@ -55,10 +55,25 @@ function normalizeTheme(theme) {
   return "midnight";
 }
 
+
+
+async function updateMyThemePreference(theme) {
+  if (!currentUser) return;
+  try {
+    await apiFetch("/users/me/theme", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ theme }),
+    });
+  } catch {
+    // Non-fatal; keep local preference.
+  }
+}
 function setTheme(theme) {
   const normalized = normalizeTheme(theme);
   document.documentElement.setAttribute("data-theme", normalized);
-  localStorage.setItem("theme", normalized);
+  localStorage.setItem("theme:last", normalized);
+  if (currentUser?.username) localStorage.setItem(`theme:user:${currentUser.username}`, normalized);
   if (themeSelect) themeSelect.value = normalized;
 }
 
@@ -83,7 +98,7 @@ function bindPasswordToggles(root = document) {
 }
 
 (function initTheme() {
-  const saved = localStorage.getItem("theme");
+  const saved = localStorage.getItem("theme:last");
   setTheme(saved || "midnight");
 })();
 
@@ -92,6 +107,7 @@ bindPasswordToggles();
 if (themeSelect) {
   themeSelect.addEventListener("change", () => {
     setTheme(themeSelect.value);
+    updateMyThemePreference(themeSelect.value);
     closeMenu();
   });
 }
@@ -174,6 +190,9 @@ async function refreshSession() {
 
     const data = await response.json();
     currentUser = { id: data.id, username: data.username, role: data.role };
+    if (data.theme) setTheme(data.theme);
+    localStorage.setItem("theme:last", normalizeTheme(data.theme || "midnight"));
+    localStorage.setItem(`theme:user:${data.username}`, normalizeTheme(data.theme || "midnight"));
     defaultCurrency = data.default_currency || "USD";
     setSessionLabel();
     setAdminVisibility();
@@ -617,6 +636,19 @@ async function loadMerchantFilterOptions() {
   });
 }
 
+
+function setDefaultYearFilters() {
+  if (!filterDateFromInput || !filterDateToInput) return;
+
+  // Only set defaults if the user hasn't already chosen something.
+  if (filterDateFromInput.value || filterDateToInput.value) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  filterDateFromInput.value = `${year}-01-01`;
+  filterDateToInput.value = `${year}-12-31`;
+}
+
 function buildReceiptFiltersQuery() {
   const params = new URLSearchParams();
   const dateFrom = filterDateFromInput.value;
@@ -711,6 +743,7 @@ async function initializeAuthenticatedApp() {
   const ok = await refreshSession();
   if (!ok) return;
   renderSelectedFiles();
+  setDefaultYearFilters();
   await loadMerchantFilterOptions();
   await loadReceipts();
 }
