@@ -51,6 +51,26 @@ class UserCreate(BaseModel):
 class UserPasswordUpdate(BaseModel):
     password: str = Field(min_length=8, max_length=256)
 
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=120)
+    scope: str = Field(default="upload", min_length=3, max_length=32)
+
+
+class ApiTokenOut(BaseModel):
+    id: int
+    name: str
+    scope: str
+    token_prefix: str
+    revoked: bool
+    created_at: datetime | None
+    last_used_at: datetime | None
+
+
+class ApiTokenCreated(BaseModel):
+    token: str
+    token_meta: ApiTokenOut
+
+
 
 class ThemeUpdate(BaseModel):
     theme: str = Field(min_length=3, max_length=32)

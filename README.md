@@ -158,3 +158,19 @@ Notes:
 
 ## Theme preference
 Theme selection (Light/Midnight Blue/OLED Black) is stored per user in the database and is applied on login.
+
+
+## API tokens
+For Apple Shortcuts (Share Sheet upload) or other automation, you can create an upload-scoped API token in the Admin Panel.
+
+Use it by sending a Bearer token in the `Authorization` header:
+
+```http
+POST /receipts/upload
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+Notes:
+- Upload tokens can only be used for `POST /receipts/upload`.
+- Tokens are shown only once when created; store them somewhere safe.

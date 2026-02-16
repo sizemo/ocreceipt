@@ -27,6 +27,11 @@ def verify_password(password: str, salt: str, expected_hash: str) -> bool:
     return hmac.compare_digest(computed, expected_hash)
 
 
+
+
+def hash_api_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
 def hash_session_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 

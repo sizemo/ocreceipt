@@ -91,7 +91,42 @@
           </div>
         </section>
 
+        
+
         <section class="card">
+          <h2>API Tokens</h2>
+          <p>Create an upload token for Apple Shortcuts or other automation. Tokens are shown only once.</p>
+
+          <div class="admin-grid">
+            <div class="admin-box">
+              <h3>Create Token</h3>
+              <form id="create-token-form" class="admin-form" autocomplete="off">
+                <label>Name <input id="new-token-name" type="text" required /></label>
+                <button type="submit">Create token</button>
+              </form>
+              <small id="token-created" class="muted"></small>
+            </div>
+
+            <div class="admin-box">
+              <h3>Existing Tokens</h3>
+              <table class="compact-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Prefix</th>
+                    <th>Scope</th>
+                    <th>Revoked</th>
+                    <th>Last Used</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="api-tokens-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+<section class="card">
           <h2>Settings</h2>
           <form id="settings-form" class="admin-form">
             <label>

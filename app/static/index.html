@@ -71,7 +71,7 @@
             <h2>Logged Receipts</h2>
             <div class="table-actions">
               <button id="refresh-btn" type="button" class="secondary">Refresh</button>
-              <a class="button secondary" href="/receipts/export">Export CSV</a>
+              <a id="export-csv-link" class="button secondary" href="/receipts/export">Export CSV</a>
             </div>
           </div>
 
@@ -107,14 +107,14 @@
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Date</th>
-                  <th>Merchant</th>
-                  <th>Total</th>
-                  <th>Sales Tax</th>
-                  <th>Confidence</th>
-                  <th>Review</th>
-                  <th>Created</th>
+                  <th><button type="button" class="th-sort" data-sort="id">ID</button></th>
+                  <th><button type="button" class="th-sort" data-sort="purchase_date">Date</button></th>
+                  <th><button type="button" class="th-sort" data-sort="merchant">Merchant</button></th>
+                  <th><button type="button" class="th-sort" data-sort="total_amount">Total</button></th>
+                  <th><button type="button" class="th-sort" data-sort="sales_tax_amount">Sales Tax</button></th>
+                  <th><button type="button" class="th-sort" data-sort="extraction_confidence">Confidence</button></th>
+                  <th><button type="button" class="th-sort" data-sort="reviewed">Review</button></th>
+                  <th><button type="button" class="th-sort" data-sort="created_at">Created</button></th>
                   <th>Receipt</th>
                   <th class="admin-only">Edit</th>
                   <th class="admin-only">Delete</th>

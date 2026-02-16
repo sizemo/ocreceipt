@@ -5,13 +5,13 @@ import re
 import shutil
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, func, select, text
@@ -20,9 +20,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .auth import create_session, delete_session, get_user_by_session_token, hash_password, verify_password
+from .auth import create_session, delete_session, get_user_by_session_token, hash_api_token, hash_password, verify_password
 from .database import Base, engine, get_db
-from .models import InstanceSetting, Merchant, Receipt, ReceiptImage, User, UserSession
+from .models import ApiToken, InstanceSetting, Merchant, Receipt, ReceiptImage, User, UserSession
 from .ocr import extract_receipt_fields, render_pdf_preview_image, run_ocr, run_ocr_pdf
 from .schemas import (
     InstanceResetRequest,
@@ -35,6 +35,9 @@ from .schemas import (
     UserCreate,
     UserOut,
     UserPasswordUpdate,
+    ApiTokenCreate,
+    ApiTokenCreated,
+    ApiTokenOut,
     ThemeUpdate,
 )
 
@@ -127,6 +130,56 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 def admin_page(_: User = Depends(require_admin)):
     return FileResponse(STATIC_DIR / "admin.html")
 
+def _get_user_from_upload_token(db: Session, raw_token: str) -> User | None:
+    token_hash = hash_api_token(raw_token)
+    token = db.scalar(select(ApiToken).where(ApiToken.token_hash == token_hash, ApiToken.revoked == False))
+    if token is None:
+        return None
+
+    # Only support upload-scoped tokens for now.
+    if (token.scope or '').strip().lower() != 'upload':
+        return None
+
+    user = db.scalar(select(User).where(User.id == token.created_by_user_id, User.is_active == True))
+    if user is None or user.role != 'admin':
+        return None
+
+    token.last_used_at = datetime.now(timezone.utc)
+    db.add(token)
+    db.commit()
+    return user
+
+
+def require_upload_auth(
+    authorization: str | None = Header(default=None),
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    db: Session = Depends(get_db),
+) -> User:
+    # Prefer normal cookie session when present.
+    user = get_user_by_session_token(db, session_token) if session_token else None
+    if user is not None:
+        if user.role != 'admin':
+            raise HTTPException(status_code=403, detail='Admin required')
+        return user
+
+    # Otherwise allow a Bearer token for uploads.
+    if not authorization:
+        raise HTTPException(status_code=401, detail='Authentication required')
+
+    parts = authorization.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != 'bearer':
+        raise HTTPException(status_code=401, detail='Invalid Authorization header')
+
+    raw = parts[1].strip()
+    if not raw:
+        raise HTTPException(status_code=401, detail='Invalid token')
+
+    user = _get_user_from_upload_token(db, raw)
+    if user is None:
+        raise HTTPException(status_code=401, detail='Invalid token')
+    return user
+
+
 
 
 @app.post("/auth/login")
@@ -197,7 +250,7 @@ def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_
 
 
 @app.post("/receipts/upload", response_model=ReceiptOut)
-async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(require_admin)):
+async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(require_upload_auth)):
     content_type = (file.content_type or "").lower()
     original_name = file.filename or "receipt"
     is_pdf = content_type == "application/pdf" or Path(original_name).suffix.lower() == ".pdf"
@@ -422,8 +475,26 @@ def get_receipt_image(receipt_id: int, db: Session = Depends(get_db), _: User = 
 
 
 @app.get("/receipts/export")
-def export_receipts_csv(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    receipts = db.scalars(select(Receipt).order_by(Receipt.created_at.asc())).all()
+def export_receipts_csv(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    merchant: str | None = Query(default=None, max_length=200),
+    reviewed: bool | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    stmt = select(Receipt)
+
+    if date_from is not None:
+        stmt = stmt.where(Receipt.purchase_date >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(Receipt.purchase_date <= date_to)
+    if merchant:
+        stmt = stmt.where(func.lower(Receipt.merchant) == merchant.strip().lower())
+    if reviewed is not None:
+        stmt = stmt.where(Receipt.needs_review == (not reviewed))
+
+    receipts = db.scalars(stmt.order_by(Receipt.created_at.asc())).all()
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -455,6 +526,74 @@ def export_receipts_csv(db: Session = Depends(get_db), _: User = Depends(get_cur
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
 
 
+
+
+@app.get("/admin/api-tokens", response_model=list[ApiTokenOut])
+def admin_list_api_tokens(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    tokens = db.scalars(select(ApiToken).order_by(ApiToken.created_at.desc())).all()
+    return [
+        ApiTokenOut(
+            id=t.id,
+            name=t.name,
+            scope=t.scope,
+            token_prefix=t.token_prefix,
+            revoked=bool(t.revoked),
+            created_at=t.created_at,
+            last_used_at=t.last_used_at,
+        )
+        for t in tokens
+    ]
+
+
+@app.post("/admin/api-tokens", response_model=ApiTokenCreated)
+def admin_create_api_token(payload: ApiTokenCreate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    name = (payload.name or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='Name is required')
+
+    scope = (payload.scope or 'upload').strip().lower()
+    if scope != 'upload':
+        raise HTTPException(status_code=400, detail='Only upload-scoped tokens are supported')
+
+    import secrets
+
+    raw = 'ocrt_' + secrets.token_urlsafe(48)
+    token_hash = hash_api_token(raw)
+    token_prefix = raw[:10]
+
+    token = ApiToken(
+        name=name,
+        scope=scope,
+        token_hash=token_hash,
+        token_prefix=token_prefix,
+        created_by_user_id=admin.id,
+        revoked=False,
+    )
+    db.add(token)
+    db.commit()
+    db.refresh(token)
+
+    meta = ApiTokenOut(
+        id=token.id,
+        name=token.name,
+        scope=token.scope,
+        token_prefix=token.token_prefix,
+        revoked=bool(token.revoked),
+        created_at=token.created_at,
+        last_used_at=token.last_used_at,
+    )
+    return ApiTokenCreated(token=raw, token_meta=meta)
+
+
+@app.patch("/admin/api-tokens/{token_id}/revoke")
+def admin_revoke_api_token(token_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    token = db.scalar(select(ApiToken).where(ApiToken.id == token_id))
+    if token is None:
+        raise HTTPException(status_code=404, detail='Token not found')
+    token.revoked = True
+    db.add(token)
+    db.commit()
+    return {"status": "revoked", "token_id": token_id}
 @app.get("/admin/users", response_model=list[UserOut])
 def admin_list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     users = db.scalars(select(User).order_by(User.created_at.asc())).all()

@@ -36,6 +36,21 @@ class Merchant(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+
+
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False, server_default="upload")
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 class User(Base):
     __tablename__ = "users"
 

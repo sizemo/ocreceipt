@@ -17,7 +17,9 @@ const dropzone = document.getElementById("dropzone");
 const uploadBtn = document.getElementById("upload-btn");
 const uploadList = document.getElementById("upload-list");
 const receiptsBody = document.getElementById("receipts-body");
+const receiptsTable = receiptsBody?.closest("table");
 const refreshBtn = document.getElementById("refresh-btn");
+const exportCsvLink = document.getElementById("export-csv-link");
 
 const receiptModal = document.getElementById("receipt-modal");
 const receiptModalImage = document.getElementById("receipt-modal-image");
@@ -48,6 +50,8 @@ let receiptRows = [];
 let merchantSearchAbort = null;
 let currentUser = null;
 let defaultCurrency = "USD";
+
+let sortState = { key: "created_at", dir: "desc" };
 
 function normalizeTheme(theme) {
   if (theme === "dark") return "midnight";
@@ -409,6 +413,7 @@ uploadBtn.addEventListener("click", async () => {
   appendStatus(`Done: ${success}/${queue.length} uploaded, OCR completed for ${ocrComplete}.`);
   await loadMerchantFilterOptions();
   await loadReceipts();
+  bindTableSorting();
 });
 
 function formatMoney(value) {
@@ -623,6 +628,89 @@ async function deleteReceipt(receiptId) {
   await loadReceipts();
 }
 
+
+function compareMaybeNull(a, b, dir) {
+  const aNull = a === null || a === undefined || a === "";
+  const bNull = b === null || b === undefined || b === "";
+  if (aNull && bNull) return 0;
+  if (aNull) return 1;
+  if (bNull) return -1;
+  return dir === "asc" ? (a > b ? 1 : a < b ? -1 : 0) : (a < b ? 1 : a > b ? -1 : 0);
+}
+
+function applySort(rows) {
+  const { key, dir } = sortState;
+  const factor = dir === "asc" ? 1 : -1;
+
+  const getVal = (row) => {
+    if (key === "reviewed") return row.needs_review ? 0 : 1;
+    if (key === "purchase_date" || key === "created_at") {
+      const v = row[key];
+      if (!v) return null;
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d.getTime();
+    }
+    if (key === "merchant") return (row.merchant || "").toLowerCase();
+    if (["id", "total_amount", "sales_tax_amount", "extraction_confidence"].includes(key)) {
+      const v = row[key];
+      return v === null || v === undefined || v === "" ? null : Number(v);
+    }
+    return row[key];
+  };
+
+  // Stable sort
+  return rows
+    .map((row, idx) => ({ row, idx }))
+    .sort((a, b) => {
+      const av = getVal(a.row);
+      const bv = getVal(b.row);
+
+      if (key === "merchant") {
+        const c = compareMaybeNull(av, bv, dir);
+        return c !== 0 ? c : a.idx - b.idx;
+      }
+
+      const c = compareMaybeNull(av, bv, dir);
+      return c !== 0 ? c : a.idx - b.idx;
+    })
+    .map((x) => x.row);
+}
+
+function updateSortIndicators() {
+  if (!receiptsTable) return;
+  receiptsTable.querySelectorAll("button.th-sort[data-sort]").forEach((btn) => {
+    const k = btn.dataset.sort;
+    if (k === sortState.key) {
+      btn.dataset.dir = sortState.dir;
+    } else {
+      btn.removeAttribute("data-dir");
+    }
+  });
+}
+
+function bindTableSorting() {
+  if (!receiptsTable) return;
+
+  receiptsTable.querySelectorAll("button.th-sort[data-sort]").forEach((btn) => {
+    if (btn.dataset.bound === "true") return;
+    btn.dataset.bound = "true";
+
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.sort;
+      if (!key) return;
+      if (sortState.key === key) {
+        sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
+      } else {
+        sortState.key = key;
+        sortState.dir = "asc";
+      }
+      updateSortIndicators();
+      renderReceipts();
+    });
+  });
+
+  updateSortIndicators();
+}
 async function loadMerchantFilterOptions() {
   const response = await apiFetch("/merchants?limit=500");
   if (!response.ok) return;
@@ -649,6 +737,12 @@ function setDefaultYearFilters() {
   filterDateToInput.value = `${year}-12-31`;
 }
 
+
+function updateExportCsvLink() {
+  if (!exportCsvLink) return;
+  exportCsvLink.href = `/receipts/export${buildReceiptFiltersQuery()}`;
+}
+
 function buildReceiptFiltersQuery() {
   const params = new URLSearchParams();
   const dateFrom = filterDateFromInput.value;
@@ -666,14 +760,80 @@ function buildReceiptFiltersQuery() {
   return query ? `?${query}` : "";
 }
 
-applyFiltersBtn.addEventListener("click", loadReceipts);
+applyFiltersBtn.addEventListener("click", () => { updateExportCsvLink(); loadReceipts(); });
 clearFiltersBtn.addEventListener("click", () => {
+  updateExportCsvLink();
   filterDateFromInput.value = "";
   filterDateToInput.value = "";
   filterMerchantInput.value = "";
   filterReviewSelect.value = "all";
   loadReceipts();
 });
+
+
+[filterDateFromInput, filterDateToInput, filterMerchantInput, filterReviewSelect].forEach((el) => {
+  if (!el) return;
+  el.addEventListener("change", updateExportCsvLink);
+});
+
+
+function renderReceipts() {
+  const rows = applySort(receiptRows || []);
+  receiptsBody.innerHTML = "";
+
+  const admin = isAdmin();
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="no-results" colspan="${admin ? 11 : 9}">No receipts found for current filters.</td>`;
+    receiptsBody.appendChild(tr);
+    return;
+  }
+
+  rows.forEach((row) => {
+    const receiptCell = row.image_url
+      ? `<button class="secondary table-btn" type="button" data-image-url="${row.image_url}">View</button>`
+      : '<span class="muted">Missing</span>';
+
+    const reviewCell = row.needs_review && admin
+      ? `<div class="review-cell"><span class="badge review">Needs Review</span><button class="secondary table-btn" type="button" data-mark-reviewed-id="${row.id}">Mark reviewed</button></div>`
+      : row.needs_review
+        ? '<span class="badge review">Needs Review</span>'
+        : '<span class="badge good">Reviewed</span>';
+
+    const adminCells = admin
+      ? `<td data-label="Edit"><button class="secondary table-btn" type="button" data-edit-id="${row.id}">Edit</button></td>
+         <td data-label="Delete"><button class="danger table-btn" type="button" data-delete-id="${row.id}">Delete</button></td>`
+      : "";
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td data-label="ID">${row.id}</td>
+      <td data-label="Date">${formatDate(row.purchase_date)}</td>
+      <td data-label="Merchant">${row.merchant || "-"}</td>
+      <td data-label="Total">${formatMoney(row.total_amount)}</td>
+      <td data-label="Sales Tax">${formatMoney(row.sales_tax_amount)}</td>
+      <td data-label="Confidence">${formatConfidence(row.extraction_confidence)}</td>
+      <td data-label="Review">${reviewCell}</td>
+      <td data-label="Created">${formatDate(row.created_at)}</td>
+      <td data-label="Receipt">${receiptCell}</td>
+      ${adminCells}
+    `;
+    receiptsBody.appendChild(tr);
+  });
+
+  receiptsBody.querySelectorAll("button[data-image-url]").forEach((button) => {
+    button.addEventListener("click", () => viewReceipt(button.dataset.imageUrl));
+  });
+  receiptsBody.querySelectorAll("button[data-edit-id]").forEach((button) => {
+    button.addEventListener("click", () => openEditModal(Number(button.dataset.editId)));
+  });
+  receiptsBody.querySelectorAll("button[data-delete-id]").forEach((button) => {
+    button.addEventListener("click", () => deleteReceipt(Number(button.dataset.deleteId)));
+  });
+  receiptsBody.querySelectorAll("button[data-mark-reviewed-id]").forEach((button) => {
+    button.addEventListener("click", () => markReviewed(Number(button.dataset.markReviewedId)));
+  });
+}
 
 async function loadReceipts() {
   const response = await apiFetch(`/receipts${buildReceiptFiltersQuery()}`);
@@ -744,6 +904,7 @@ async function initializeAuthenticatedApp() {
   if (!ok) return;
   renderSelectedFiles();
   setDefaultYearFilters();
+  updateExportCsvLink();
   await loadMerchantFilterOptions();
   await loadReceipts();
 }

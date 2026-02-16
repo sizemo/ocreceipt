@@ -46,6 +46,11 @@ const settingsForm = document.getElementById("settings-form");
 const defaultCurrencyInput = document.getElementById("default-currency");
 const resetInstanceBtn = document.getElementById("reset-instance-btn");
 
+const createTokenForm = document.getElementById("create-token-form");
+const newTokenNameInput = document.getElementById("new-token-name");
+const tokenCreatedLabel = document.getElementById("token-created");
+const apiTokensBody = document.getElementById("api-tokens-body");
+
 let currentUser = null;
 
 function normalizeTheme(theme) {
@@ -200,6 +205,60 @@ function setAdminMessage(message, isError = false) {
   adminMessage.className = isError ? "err-text" : "";
 }
 
+
+
+async function loadApiTokens() {
+  if (!apiTokensBody) return;
+
+  const response = await apiFetch("/admin/api-tokens");
+  if (!response.ok) return;
+
+  const tokens = await response.json();
+  apiTokensBody.innerHTML = "";
+
+  if (!tokens.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td colspan="7" class="muted">No tokens created yet.</td>';
+    apiTokensBody.appendChild(tr);
+    return;
+  }
+
+  tokens.forEach((t) => {
+    const tr = document.createElement("tr");
+    const revokeBtn = t.revoked
+      ? '<span class="muted">Revoked</span>'
+      : `<button class="danger table-btn" type="button" data-revoke-token-id="${t.id}">Revoke</button>`;
+
+    tr.innerHTML = `
+      <td data-label="ID">${t.id}</td>
+      <td data-label="Name">${t.name}</td>
+      <td data-label="Prefix">${t.token_prefix}</td>
+      <td data-label="Scope">${t.scope}</td>
+      <td data-label="Revoked">${t.revoked ? "yes" : "no"}</td>
+      <td data-label="Last Used">${t.last_used_at ? new Date(t.last_used_at).toLocaleString() : ""}</td>
+      <td data-label="Actions">${revokeBtn}</td>
+    `;
+    apiTokensBody.appendChild(tr);
+  });
+
+  apiTokensBody.querySelectorAll("button[data-revoke-token-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const tokenId = Number(btn.dataset.revokeTokenId);
+      if (!tokenId) return;
+      if (!window.confirm(`Revoke token #${tokenId}?`)) return;
+
+      const resp = await apiFetch(`/admin/api-tokens/${tokenId}/revoke`, { method: "PATCH" });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setAdminMessage(`Revoke failed: ${data.detail || resp.status}`, true);
+        return;
+      }
+
+      setAdminMessage(`Token #${tokenId} revoked.`);
+      await loadApiTokens();
+    });
+  });
+}
 async function loadAdminUsers() {
   const response = await apiFetch("/admin/users");
   if (!response.ok) return;
@@ -366,5 +425,36 @@ if (setPasswordForm) {
 
     setAdminMessage(`Password updated for user #${userId}.`);
     setPasswordModal.close();
+  });
+}
+
+if (createTokenForm) {
+  createTokenForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!newTokenNameInput) return;
+
+    const payload = { name: newTokenNameInput.value.trim(), scope: "upload" };
+    const response = await apiFetch("/admin/api-tokens", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      setAdminMessage(`Create token failed: ${data.detail || response.status}`, true);
+      return;
+    }
+
+    const data = await response.json();
+    const token = data.token;
+
+    if (tokenCreatedLabel) {
+      tokenCreatedLabel.textContent = `Token (save it now): ${token}`;
+    }
+
+    newTokenNameInput.value = "";
+    setAdminMessage("Token created. Copy it now; it will not be shown again.");
+    await loadApiTokens();
   });
 }
