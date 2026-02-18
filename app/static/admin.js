@@ -390,6 +390,14 @@ async function loadSettings() {
   setVisualAccessibility(data.visual_accessibility_enabled !== false);
 }
 
+if (visualAccessibilityEnabledInput) {
+  visualAccessibilityEnabledInput.addEventListener("change", () => {
+    const enabled = !!visualAccessibilityEnabledInput.checked;
+    setVisualAccessibility(enabled);
+    setAdminMessage("Visual accessibility preview updated. Click Save settings to persist.");
+  });
+}
+
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const payload = {

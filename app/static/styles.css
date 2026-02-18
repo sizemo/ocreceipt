@@ -388,11 +388,18 @@ select {
   border-radius: 10px;
 }
 
-input:focus,
-select:focus {
+:root:not([data-visual-accessibility="off"]) input:focus,
+:root:not([data-visual-accessibility="off"]) select:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 72%, white 28%);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+:root[data-visual-accessibility="off"] input:focus,
+:root[data-visual-accessibility="off"] select:focus {
+  outline: none;
+  border-color: var(--border);
+  box-shadow: none;
 }
 
 .upload-list {
@@ -907,4 +914,46 @@ tr:hover td {
   height: 1.05rem;
   min-height: 1.05rem;
   margin: 0;
+}
+
+
+.settings-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--surface-strong) 90%, transparent);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.settings-panel-emphasis {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-strong));
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.toggle-setting {
+  align-items: flex-start;
+}
+
+.toggle-setting > span {
+  display: grid;
+  gap: 0.24rem;
+}
+
+.toggle-setting strong {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.toggle-setting input[type="checkbox"] {
+  accent-color: var(--accent);
 }

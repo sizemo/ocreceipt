@@ -135,15 +135,26 @@
 <section class="card">
           <h2>Settings</h2>
           <form id="settings-form" class="admin-form">
-            <label>
-              Default Currency (ISO 4217)
-              <input id="default-currency" type="text" maxlength="3" required />
-            </label>
-            <label class="toggle-row" for="visual-accessibility-enabled">
-              <span>Visual Accessibility Cues</span>
-              <input id="visual-accessibility-enabled" type="checkbox" />
-            </label>
-            <small class="muted">When enabled, focus outlines and invalid-field highlights are shown.</small>
+            <div class="settings-panel">
+              <p class="settings-title">Display</p>
+              <label>
+                Default Currency (ISO 4217)
+                <input id="default-currency" type="text" maxlength="3" required />
+              </label>
+            </div>
+
+            <div class="settings-panel settings-panel-emphasis">
+              <p class="settings-title">Visuals</p>
+              <label class="toggle-row toggle-setting" for="visual-accessibility-enabled">
+                <span>
+                  <strong>Visual Accessibility Cues</strong>
+                  <small class="muted">Show stronger focus outlines and invalid-field highlights.</small>
+                </span>
+                <input id="visual-accessibility-enabled" type="checkbox" />
+              </label>
+              <small class="muted">Uncheck this for a cleaner, lower-highlight UI.</small>
+            </div>
+
             <button type="submit">Save settings</button>
           </form>
         </section>
