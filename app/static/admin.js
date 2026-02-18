@@ -64,9 +64,6 @@ function normalizeTheme(theme) {
 
 async function updateMyThemePreference(theme) {
   if (!currentUser) return;
-  createTokenInFlight = true;
-  if (submitBtn) submitBtn.disabled = true;
-
   try {
     await apiFetch("/users/me/theme", {
       method: "PATCH",
@@ -439,11 +436,21 @@ async function handleCreateTokenSubmit(event) {
   if (!newTokenNameInput || !createTokenForm) return;
 
   const submitBtn = createTokenForm.querySelector('button[type="submit"]');
+  const defaultBtnText = submitBtn ? submitBtn.textContent : "Create token";
 
   const name = newTokenNameInput.value.trim();
   if (!name) {
     setAdminMessage("Token name is required.", true);
     return;
+  }
+
+  createTokenInFlight = true;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Creating...";
+  }
+  if (tokenCreatedLabel) {
+    tokenCreatedLabel.textContent = "";
   }
 
   try {
@@ -456,7 +463,9 @@ async function handleCreateTokenSubmit(event) {
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      setAdminMessage(`Create token failed: ${data.detail || response.status}`, true);
+      const msg = `Create token failed: ${data.detail || response.status}`;
+      setAdminMessage(msg, true);
+      if (tokenCreatedLabel) tokenCreatedLabel.textContent = msg;
       return;
     }
 
@@ -471,10 +480,15 @@ async function handleCreateTokenSubmit(event) {
     setAdminMessage("Token created. Copy it now; it will not be shown again.");
     await loadApiTokens();
   } catch (error) {
-    setAdminMessage(`Create token failed: ${error?.message || "unexpected error"}`, true);
+    const msg = `Create token failed: ${error?.message || "unexpected error"}`;
+    setAdminMessage(msg, true);
+    if (tokenCreatedLabel) tokenCreatedLabel.textContent = msg;
   } finally {
     createTokenInFlight = false;
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = defaultBtnText;
+    }
   }
 }
 

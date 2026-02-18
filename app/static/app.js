@@ -413,7 +413,6 @@ uploadBtn.addEventListener("click", async () => {
   appendStatus(`Done: ${success}/${queue.length} uploaded, OCR completed for ${ocrComplete}.`);
   await loadMerchantFilterOptions();
   await loadReceipts();
-  bindTableSorting();
 });
 
 function formatMoney(value) {
@@ -839,62 +838,10 @@ async function loadReceipts() {
   const response = await apiFetch(`/receipts${buildReceiptFiltersQuery()}`);
   if (!response.ok) return;
 
-  const rows = await response.json();
-  receiptRows = rows;
-  receiptsBody.innerHTML = "";
-
-  const admin = isAdmin();
-  if (!rows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="no-results" colspan="${admin ? 11 : 9}">No receipts found for current filters.</td>`;
-    receiptsBody.appendChild(tr);
-    return;
-  }
-
-  rows.forEach((row) => {
-    const receiptCell = row.image_url
-      ? `<button class="secondary table-btn" type="button" data-image-url="${row.image_url}">View</button>`
-      : '<span class="muted">Missing</span>';
-
-    const reviewCell = row.needs_review && admin
-      ? `<div class="review-cell"><span class="badge review">Needs Review</span><button class="secondary table-btn" type="button" data-mark-reviewed-id="${row.id}">Mark reviewed</button></div>`
-      : row.needs_review
-        ? '<span class="badge review">Needs Review</span>'
-        : '<span class="badge good">Reviewed</span>';
-
-    const adminCells = admin
-      ? `<td data-label="Edit"><button class="secondary table-btn" type="button" data-edit-id="${row.id}">Edit</button></td>
-         <td data-label="Delete"><button class="danger table-btn" type="button" data-delete-id="${row.id}">Delete</button></td>`
-      : "";
-
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td data-label="ID">${row.id}</td>
-      <td data-label="Date">${formatDate(row.purchase_date)}</td>
-      <td data-label="Merchant">${row.merchant || "-"}</td>
-      <td data-label="Total">${formatMoney(row.total_amount)}</td>
-      <td data-label="Sales Tax">${formatMoney(row.sales_tax_amount)}</td>
-      <td data-label="Confidence">${formatConfidence(row.extraction_confidence)}</td>
-      <td data-label="Review">${reviewCell}</td>
-      <td data-label="Created">${formatDate(row.created_at)}</td>
-      <td data-label="Receipt">${receiptCell}</td>
-      ${adminCells}
-    `;
-    receiptsBody.appendChild(tr);
-  });
-
-  receiptsBody.querySelectorAll("button[data-image-url]").forEach((button) => {
-    button.addEventListener("click", () => viewReceipt(button.dataset.imageUrl));
-  });
-  receiptsBody.querySelectorAll("button[data-edit-id]").forEach((button) => {
-    button.addEventListener("click", () => openEditModal(Number(button.dataset.editId)));
-  });
-  receiptsBody.querySelectorAll("button[data-delete-id]").forEach((button) => {
-    button.addEventListener("click", () => deleteReceipt(Number(button.dataset.deleteId)));
-  });
-  receiptsBody.querySelectorAll("button[data-mark-reviewed-id]").forEach((button) => {
-    button.addEventListener("click", () => markReviewed(Number(button.dataset.markReviewedId)));
-  });
+  receiptRows = await response.json();
+  updateExportCsvLink();
+  renderReceipts();
+  bindTableSorting();
 }
 
 refreshBtn.addEventListener("click", loadReceipts);
