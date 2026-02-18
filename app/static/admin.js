@@ -388,6 +388,7 @@ async function initializeAdmin() {
   const ok = await refreshSession();
   if (!ok) return;
   await loadAdminUsers();
+  await loadApiTokens();
   await loadSettings();
 }
 
@@ -428,12 +429,18 @@ if (setPasswordForm) {
   });
 }
 
-if (createTokenForm) {
-  createTokenForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!newTokenNameInput) return;
+async function handleCreateTokenSubmit(event) {
+  event.preventDefault();
+  if (!newTokenNameInput) return;
 
-    const payload = { name: newTokenNameInput.value.trim(), scope: "upload" };
+  const name = newTokenNameInput.value.trim();
+  if (!name) {
+    setAdminMessage("Token name is required.", true);
+    return;
+  }
+
+  try {
+    const payload = { name, scope: "upload" };
     const response = await apiFetch("/admin/api-tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -456,5 +463,21 @@ if (createTokenForm) {
     newTokenNameInput.value = "";
     setAdminMessage("Token created. Copy it now; it will not be shown again.");
     await loadApiTokens();
-  });
+  } catch (error) {
+    setAdminMessage(`Create token failed: ${error?.message || "unexpected error"}`, true);
+  }
 }
+
+if (createTokenForm) {
+  // Belt-and-suspenders: avoid browser default form navigation.
+  createTokenForm.setAttribute("action", "javascript:void(0)");
+  createTokenForm.addEventListener("submit", handleCreateTokenSubmit);
+}
+
+// Fallback delegated handler in case this form is re-rendered.
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  if (form.id !== "create-token-form") return;
+  handleCreateTokenSubmit(event);
+});
