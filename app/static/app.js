@@ -16,10 +16,12 @@ const fileInput = document.getElementById("file-input");
 const dropzone = document.getElementById("dropzone");
 const uploadBtn = document.getElementById("upload-btn");
 const uploadList = document.getElementById("upload-list");
+const uploadStatus = document.getElementById("upload-status");
 const receiptsBody = document.getElementById("receipts-body");
 const receiptsTable = receiptsBody?.closest("table");
 const refreshBtn = document.getElementById("refresh-btn");
 const exportCsvLink = document.getElementById("export-csv-link");
+const sortStatus = document.getElementById("sort-status");
 
 const receiptModal = document.getElementById("receipt-modal");
 const receiptModalImage = document.getElementById("receipt-modal-image");
@@ -208,14 +210,38 @@ async function refreshSession() {
   }
 }
 
+
+
+function setFieldInvalid(input, invalid) {
+  if (!input) return;
+  input.setAttribute("aria-invalid", invalid ? "true" : "false");
+}
+
+function bindInvalidClear(input) {
+  if (!input) return;
+  input.addEventListener("input", () => setFieldInvalid(input, false));
+}
+
+[loginUsernameInput, loginPasswordInput].forEach(bindInvalidClear);
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   authError.textContent = "";
+
+  setFieldInvalid(loginUsernameInput, false);
+  setFieldInvalid(loginPasswordInput, false);
 
   const payload = {
     username: loginUsernameInput.value.trim(),
     password: loginPasswordInput.value,
   };
+
+  if (!payload.username || !payload.password) {
+    setFieldInvalid(loginUsernameInput, !payload.username);
+    setFieldInvalid(loginPasswordInput, !payload.password);
+    authError.textContent = "Username and password are required.";
+    return;
+  }
 
   const response = await fetch("/auth/login", {
     method: "POST",
@@ -324,6 +350,7 @@ function createStatusRow(fileName) {
 function updateStatusRow(statusRow, message, className = "") {
   statusRow.right.textContent = message;
   statusRow.item.className = className;
+  if (uploadStatus) uploadStatus.textContent = message;
 }
 
 function uploadOne(file, onUploadFinished) {
@@ -372,6 +399,7 @@ function appendStatus(message, className = "") {
   if (className) item.className = className;
   item.textContent = message;
   uploadList.appendChild(item);
+  if (uploadStatus) uploadStatus.textContent = message;
 }
 
 uploadBtn.addEventListener("click", async () => {
@@ -386,6 +414,7 @@ uploadBtn.addEventListener("click", async () => {
 
   uploadBtn.disabled = true;
   uploadBtn.textContent = "Uploading...";
+  uploadList?.setAttribute("aria-busy", "true");
 
   const queue = [...selectedFiles];
   selectedFiles = [];
@@ -410,6 +439,7 @@ uploadBtn.addEventListener("click", async () => {
 
   uploadBtn.disabled = false;
   uploadBtn.textContent = "Upload selected files";
+  uploadList?.setAttribute("aria-busy", "false");
   appendStatus(`Done: ${success}/${queue.length} uploaded, OCR completed for ${ocrComplete}.`);
   await loadMerchantFilterOptions();
   await loadReceipts();
@@ -452,22 +482,77 @@ function toDateInputValue(value) {
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
 }
 
+
+
+const dialogFocusState = new WeakMap();
+
+function getFocusableWithin(root) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll('a[href], button:not([disabled]), textarea, input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter((el) => !el.hasAttribute('hidden'));
+}
+
+function openDialogA11y(dialog, initialFocusEl) {
+  if (!dialog || dialog.open) return;
+
+  const previous = document.activeElement;
+  const keyHandler = (event) => {
+    if (event.key !== 'Tab') return;
+    const focusables = getFocusableWithin(dialog);
+    if (!focusables.length) return;
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  dialogFocusState.set(dialog, { previous, keyHandler });
+  dialog.addEventListener('keydown', keyHandler);
+  dialog.showModal();
+
+  const target = initialFocusEl || getFocusableWithin(dialog)[0];
+  if (target) target.focus();
+}
+
+function closeDialogA11y(dialog) {
+  if (!dialog || !dialog.open) return;
+  dialog.close();
+}
+
+function cleanupDialogA11y(dialog) {
+  const state = dialogFocusState.get(dialog);
+  if (!state) return;
+  dialog.removeEventListener('keydown', state.keyHandler);
+  if (state.previous && typeof state.previous.focus === 'function') {
+    state.previous.focus();
+  }
+  dialogFocusState.delete(dialog);
+}
 function viewReceipt(imageUrl) {
   receiptModalImage.src = imageUrl;
-  receiptModal.showModal();
+  openDialogA11y(receiptModal, closeModalBtn);
 }
 
 closeModalBtn.addEventListener("click", () => {
-  receiptModal.close();
+  closeDialogA11y(receiptModal);
   receiptModalImage.src = "";
 });
 
 receiptModal.addEventListener("click", (event) => {
   if (event.target === receiptModal) {
-    receiptModal.close();
+    closeDialogA11y(receiptModal);
     receiptModalImage.src = "";
   }
 });
+receiptModal.addEventListener("close", () => cleanupDialogA11y(receiptModal));
 
 
 function clearEditPreview() {
@@ -505,22 +590,23 @@ function openEditModal(receiptId) {
     }
   }
   hideMerchantSuggestions();
-  editModal.showModal();
+  openDialogA11y(editModal, editDateInput);
 }
 
 cancelEditBtn.addEventListener("click", () => {
   hideMerchantSuggestions();
   clearEditPreview();
-  editModal.close();
+  closeDialogA11y(editModal);
 });
 
 editModal.addEventListener("click", (event) => {
   if (event.target === editModal) {
     hideMerchantSuggestions();
     clearEditPreview();
-    editModal.close();
+    closeDialogA11y(editModal);
   }
 });
+editModal.addEventListener("close", () => cleanupDialogA11y(editModal));
 
 function showMerchantSuggestions(names) {
   merchantSuggestions.innerHTML = "";
@@ -600,7 +686,7 @@ async function saveEdit(event) {
   appendStatus(`Updated receipt #${receiptId}.`, "ok");
   hideMerchantSuggestions();
   clearEditPreview();
-  editModal.close();
+  closeDialogA11y(editModal);
   await loadMerchantFilterOptions();
   await loadReceipts();
 }
@@ -677,14 +763,23 @@ function applySort(rows) {
 
 function updateSortIndicators() {
   if (!receiptsTable) return;
+  let activeSortLabel = "";
   receiptsTable.querySelectorAll("button.th-sort[data-sort]").forEach((btn) => {
     const k = btn.dataset.sort;
+    const th = btn.closest("th");
     if (k === sortState.key) {
       btn.dataset.dir = sortState.dir;
+      activeSortLabel = btn.textContent || k;
+      if (th) th.setAttribute("aria-sort", sortState.dir === "asc" ? "ascending" : "descending");
     } else {
       btn.removeAttribute("data-dir");
+      if (th) th.setAttribute("aria-sort", "none");
     }
   });
+
+  if (sortStatus && activeSortLabel) {
+    sortStatus.textContent =       `Sorted by ${activeSortLabel} ${sortState.dir === "asc" ? "ascending" : "descending"}.`;
+  }
 }
 
 function bindTableSorting() {

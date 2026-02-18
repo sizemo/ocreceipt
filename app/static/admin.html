@@ -7,25 +7,26 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="container">
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" class="container" tabindex="-1">
       <section id="auth-section" class="card auth-card">
         <h1>Admin Access</h1>
         <p>Sign in with an admin account.</p>
-        <form id="login-form" class="auth-form" autocomplete="off">
+        <form id="login-form" class="auth-form" autocomplete="off" novalidate>
           <label>
             Username
-            <input id="login-username" type="text" required />
+            <input id="login-username" type="text" required aria-describedby="auth-error" />
           </label>
           <label>
             Password
             <div class="password-field">
-  <input id="login-password" type="password" required />
+  <input id="login-password" type="password" required aria-describedby="auth-error" />
   <button type="button" class="password-toggle secondary" data-toggle-password data-target="login-password" aria-pressed="false">Show</button>
 </div>
           </label>
           <button type="submit">Sign in</button>
         </form>
-        <small id="auth-error" class="err-text"></small>
+        <small id="auth-error" class="err-text" role="alert" aria-live="assertive"></small>
       </section>
 
       <div id="admin-shell" hidden>
@@ -57,7 +58,7 @@
           <div class="admin-grid">
             <div class="admin-box">
               <h3>Create User</h3>
-              <form id="create-user-form" class="admin-form" autocomplete="off">
+              <form id="create-user-form" class="admin-form" autocomplete="off" novalidate>
                 <label>Username <input id="new-user-username" type="text" required /></label>
                 <label>Password <div class="password-field">
   <input id="new-user-password" type="password" required />
@@ -77,12 +78,13 @@
             <div class="admin-box">
               <h3>Existing Users</h3>
               <table class="compact-table">
+                <caption id="admin-users-caption" class="sr-only">Existing users and available account actions.</caption>
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Username</th>
-                    <th>Role</th>
-                    <th>Actions</th>
+                    <th scope="col">ID</th>
+                    <th scope="col">Username</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="admin-users-body"></tbody>
@@ -100,25 +102,29 @@
           <div class="admin-grid">
             <div class="admin-box">
               <h3>Create Token</h3>
-              <form id="create-token-form" class="admin-form" autocomplete="off">
+              <form id="create-token-form" class="admin-form" autocomplete="off" novalidate>
                 <label>Name <input id="new-token-name" type="text" required /></label>
                 <button type="submit">Create token</button>
               </form>
-              <small id="token-created" class="muted"></small>
+              <div class="token-output">
+  <small id="token-created" class="muted" role="status" aria-live="polite"></small>
+  <button id="copy-token-btn" type="button" class="secondary" disabled aria-label="Copy newly created token">Copy</button>
+</div>
             </div>
 
             <div class="admin-box">
               <h3>Existing Tokens</h3>
               <table class="compact-table">
+                <caption id="api-tokens-caption" class="sr-only">API tokens and revoke actions.</caption>
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Prefix</th>
-                    <th>Scope</th>
-                    <th>Revoked</th>
-                    <th>Last Used</th>
-                    <th>Actions</th>
+                    <th scope="col">ID</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Prefix</th>
+                    <th scope="col">Scope</th>
+                    <th scope="col">Revoked</th>
+                    <th scope="col">Last Used</th>
+                    <th scope="col">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="api-tokens-body"></tbody>
@@ -143,19 +149,19 @@
           <button id="reset-instance-btn" type="button" class="danger">Reset instance</button>
         </section>
 
-        <small id="admin-message"></small>
+        <small id="admin-message" role="status" aria-live="polite"></small>
       </div>
 
 
-      <dialog id="set-password-modal" class="receipt-modal">
+      <dialog id="set-password-modal" class="receipt-modal" aria-modal="true" aria-labelledby="set-password-title">
         <div class="modal-head">
           <div>
-            <h3>Set Password</h3>
+            <h3 id="set-password-title">Set Password</h3>
             <p class="muted">User <span id="set-password-user"></span></p>
           </div>
-          <button id="close-set-password" type="button" class="secondary">Close</button>
+          <button id="close-set-password" type="button" class="secondary" aria-label="Close set password dialog">Close</button>
         </div>
-        <form id="set-password-form" class="edit-form" autocomplete="off">
+        <form id="set-password-form" class="edit-form" autocomplete="off" novalidate>
           <label>
             New Password
             <div class="password-field">

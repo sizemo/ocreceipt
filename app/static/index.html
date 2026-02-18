@@ -7,25 +7,26 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="container">
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <main id="main-content" class="container" tabindex="-1">
       <section id="auth-section" class="card auth-card">
         <h1>OCReceipt</h1>
         <p>Sign in to access your instance.</p>
-        <form id="login-form" class="auth-form" autocomplete="off">
+        <form id="login-form" class="auth-form" autocomplete="off" novalidate>
           <label>
             Username
-            <input id="login-username" type="text" required />
+            <input id="login-username" type="text" required aria-describedby="auth-error" />
           </label>
           <label>
             Password
             <div class="password-field">
-  <input id="login-password" type="password" required />
+  <input id="login-password" type="password" required aria-describedby="auth-error" />
   <button type="button" class="password-toggle secondary" data-toggle-password data-target="login-password" aria-pressed="false">Show</button>
 </div>
           </label>
           <button id="login-btn" type="submit">Sign in</button>
         </form>
-        <small id="auth-error" class="err-text"></small>
+        <small id="auth-error" class="err-text" role="alert" aria-live="assertive"></small>
       </section>
 
       <div id="app-shell" hidden>
@@ -53,7 +54,7 @@
         </header>
 
         <section id="upload-card" class="card uploader admin-only">
-          <div id="dropzone" class="dropzone" tabindex="0">
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-controls="file-input" aria-label="Upload receipt files by drag and drop or by opening the file picker">
             <p><strong>Drag and drop receipt images or PDFs here</strong></p>
             <p>or</p>
             <label class="button" for="file-input">Choose files</label>
@@ -63,12 +64,13 @@
           <div class="actions upload-actions">
             <button id="upload-btn" type="button">Upload selected files</button>
           </div>
-          <ul id="upload-list" class="upload-list"></ul>
+          <ul id="upload-list" class="upload-list" aria-live="polite" aria-atomic="false"></ul>
+          <p id="upload-status" class="sr-only" role="status" aria-live="polite"></p>
         </section>
 
-        <section class="card">
+        <section class="card" aria-labelledby="logged-receipts-heading">
           <div class="table-header">
-            <h2>Logged Receipts</h2>
+            <h2 id="logged-receipts-heading">Logged Receipts</h2>
             <div class="table-actions">
               <button id="refresh-btn" type="button" class="secondary">Refresh</button>
               <a id="export-csv-link" class="button secondary" href="/receipts/export">Export CSV</a>
@@ -102,22 +104,25 @@
               <button id="clear-filters-btn" type="button" class="secondary">Clear</button>
             </div>
           </div>
+          <p id="filter-help" class="sr-only">Use the filters and press Apply filters to narrow results. Columns with sort buttons can be sorted ascending or descending.</p>
 
+          <p id="sort-status" class="sr-only" role="status" aria-live="polite"></p>
           <div class="table-wrap">
-            <table>
+            <table aria-describedby="filter-help receipts-table-caption">
+              <caption id="receipts-table-caption" class="sr-only">Logged receipts with sortable columns for ID, date, merchant, total, sales tax, confidence, review status, and created date.</caption>
               <thead>
                 <tr>
-                  <th><button type="button" class="th-sort" data-sort="id">ID</button></th>
-                  <th><button type="button" class="th-sort" data-sort="purchase_date">Date</button></th>
-                  <th><button type="button" class="th-sort" data-sort="merchant">Merchant</button></th>
-                  <th><button type="button" class="th-sort" data-sort="total_amount">Total</button></th>
-                  <th><button type="button" class="th-sort" data-sort="sales_tax_amount">Sales Tax</button></th>
-                  <th><button type="button" class="th-sort" data-sort="extraction_confidence">Confidence</button></th>
-                  <th><button type="button" class="th-sort" data-sort="reviewed">Review</button></th>
-                  <th><button type="button" class="th-sort" data-sort="created_at">Created</button></th>
-                  <th>Receipt</th>
-                  <th class="admin-only">Edit</th>
-                  <th class="admin-only">Delete</th>
+                  <th scope="col" data-sort-col="id" aria-sort="none"><button type="button" class="th-sort" data-sort="id" aria-label="Sort by ID">ID</button></th>
+                  <th scope="col" data-sort-col="purchase_date" aria-sort="none"><button type="button" class="th-sort" data-sort="purchase_date" aria-label="Sort by date">Date</button></th>
+                  <th scope="col" data-sort-col="merchant" aria-sort="none"><button type="button" class="th-sort" data-sort="merchant" aria-label="Sort by merchant">Merchant</button></th>
+                  <th scope="col" data-sort-col="total_amount" aria-sort="none"><button type="button" class="th-sort" data-sort="total_amount" aria-label="Sort by total amount">Total</button></th>
+                  <th scope="col" data-sort-col="sales_tax_amount" aria-sort="none"><button type="button" class="th-sort" data-sort="sales_tax_amount" aria-label="Sort by sales tax">Sales Tax</button></th>
+                  <th scope="col" data-sort-col="extraction_confidence" aria-sort="none"><button type="button" class="th-sort" data-sort="extraction_confidence" aria-label="Sort by extraction confidence">Confidence</button></th>
+                  <th scope="col" data-sort-col="reviewed" aria-sort="none"><button type="button" class="th-sort" data-sort="reviewed" aria-label="Sort by review status">Review</button></th>
+                  <th scope="col" data-sort-col="created_at" aria-sort="descending"><button type="button" class="th-sort" data-sort="created_at" aria-label="Sort by created date">Created</button></th>
+                  <th scope="col">Receipt</th>
+                  <th scope="col" class="admin-only">Edit</th>
+                  <th scope="col" class="admin-only">Delete</th>
                 </tr>
               </thead>
               <tbody id="receipts-body"></tbody>
@@ -127,19 +132,19 @@
       </div>
     </main>
 
-    <dialog id="receipt-modal" class="receipt-modal">
+    <dialog id="receipt-modal" class="receipt-modal" aria-modal="true" aria-labelledby="receipt-modal-title">
       <div class="modal-head">
-        <h3>Receipt Preview</h3>
-        <button id="close-modal-btn" type="button" class="secondary">Close</button>
+        <h3 id="receipt-modal-title">Receipt Preview</h3>
+        <button id="close-modal-btn" type="button" class="secondary" aria-label="Close receipt preview">Close</button>
       </div>
       <img id="receipt-modal-image" alt="Uploaded receipt preview" />
     </dialog>
 
-    <dialog id="edit-modal" class="receipt-modal admin-only">
+    <dialog id="edit-modal" class="receipt-modal admin-only" aria-modal="true" aria-labelledby="edit-modal-title">
       <form id="edit-form" class="edit-form" autocomplete="off">
         <div class="modal-head">
-          <h3>Edit Receipt</h3>
-          <button id="cancel-edit-btn" type="button" class="secondary">Cancel</button>
+          <h3 id="edit-modal-title">Edit Receipt</h3>
+          <button id="cancel-edit-btn" type="button" class="secondary" aria-label="Cancel edit receipt">Cancel</button>
         </div>
 
         <div class="edit-modal-grid">
@@ -153,7 +158,7 @@
         <label for="edit-merchant">Merchant</label>
         <div class="typeahead-wrap">
           <input id="edit-merchant" type="text" maxlength="200" placeholder="Merchant" />
-          <div id="merchant-suggestions" class="suggestions"></div>
+          <div id="merchant-suggestions" class="suggestions" role="listbox" aria-label="Merchant suggestions"></div>
         </div>
 
         <label for="edit-total">Total Amount</label>

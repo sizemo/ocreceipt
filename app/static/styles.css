@@ -31,7 +31,7 @@
   --surface-strong: #17273e;
   --surface-elev: rgb(28 44 68 / 88%);
   --text: #f1f6ff;
-  --text-muted: #9db0cb;
+  --text-muted: #c0cee2;
   --border: rgb(129 159 208 / 32%);
   --accent: #4ea8ff;
   --accent-hover: #3a9dff;
@@ -48,7 +48,7 @@
   --surface-strong: #0c0c0c;
   --surface-elev: rgb(14 14 14 / 92%);
   --text: #f8f8f8;
-  --text-muted: #b2b2b2;
+  --text-muted: #cfcfcf;
   --border: rgb(255 255 255 / 12%);
   --accent: #4da3ff;
   --accent-hover: #3a97f2;
@@ -84,13 +84,22 @@ body {
   min-height: 100%;
 }
 
+html {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+}
+
 body {
+  min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-sans);
   color: var(--text);
   background:
     radial-gradient(1100px 500px at 15% -12%, var(--bg-alt) 0%, transparent 55%),
     radial-gradient(900px 420px at 92% -18%, color-mix(in srgb, var(--accent) 25%, transparent) 0%, transparent 62%),
     var(--bg);
+  background-attachment: fixed;
   letter-spacing: -0.01em;
   text-rendering: optimizeLegibility;
 }
@@ -279,6 +288,7 @@ button,
 input,
 select {
   font: inherit;
+  min-height: 44px;
 }
 
 button,
@@ -335,6 +345,12 @@ select {
   padding: 0.5rem 0.62rem;
   background: color-mix(in srgb, var(--surface-strong) 84%, transparent);
   color: var(--text);
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--danger) 75%, white 25%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 
@@ -438,10 +454,14 @@ select:focus {
   gap: 0.4rem;
   padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
   color: inherit;
   font-weight: 650;
   cursor: pointer;
+  box-shadow: none;
+  filter: none;
+  transform: none;
 }
 
 .th-sort:hover {
@@ -512,13 +532,13 @@ tr:hover td {
 
 .badge.review {
   background: color-mix(in srgb, var(--danger) 24%, transparent);
-  color: color-mix(in srgb, var(--danger) 80%, white 20%);
+  color: color-mix(in srgb, var(--danger) 92%, white 8%);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
 .badge.good {
   background: color-mix(in srgb, var(--ok) 24%, transparent);
-  color: color-mix(in srgb, var(--ok) 80%, white 20%);
+  color: color-mix(in srgb, var(--ok) 92%, white 8%);
   border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
@@ -780,5 +800,79 @@ tr:hover td {
 
   .filter-actions {
     justify-content: flex-start;
+  }
+}
+
+
+.token-output {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: start;
+}
+
+#token-created {
+  word-break: break-all;
+}
+
+
+.th-sort:active {
+  transform: none;
+}
+
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -3rem;
+  z-index: 1000;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 75%, white 25%);
+  outline-offset: 2px;
+}
+
+
+.table-btn,
+.password-toggle,
+.th-sort {
+  min-height: 0;
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  body {
+    background-attachment: scroll;
   }
 }

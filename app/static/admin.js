@@ -49,10 +49,12 @@ const resetInstanceBtn = document.getElementById("reset-instance-btn");
 const createTokenForm = document.getElementById("create-token-form");
 const newTokenNameInput = document.getElementById("new-token-name");
 const tokenCreatedLabel = document.getElementById("token-created");
+const copyTokenBtn = document.getElementById("copy-token-btn");
 const apiTokensBody = document.getElementById("api-tokens-body");
 
 let currentUser = null;
 let createTokenInFlight = false;
+let lastCreatedToken = "";
 
 function normalizeTheme(theme) {
   if (theme === "dark") return "midnight";
@@ -161,14 +163,38 @@ async function refreshSession() {
   }
 }
 
+
+
+function setFieldInvalid(input, invalid) {
+  if (!input) return;
+  input.setAttribute("aria-invalid", invalid ? "true" : "false");
+}
+
+function bindInvalidClear(input) {
+  if (!input) return;
+  input.addEventListener("input", () => setFieldInvalid(input, false));
+}
+
+[loginUsernameInput, loginPasswordInput, newUserUsernameInput, newUserPasswordInput, newTokenNameInput, setPasswordInput].forEach(bindInvalidClear);
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   authError.textContent = "";
+
+  setFieldInvalid(loginUsernameInput, false);
+  setFieldInvalid(loginPasswordInput, false);
 
   const payload = {
     username: loginUsernameInput.value.trim(),
     password: loginPasswordInput.value,
   };
+
+  if (!payload.username || !payload.password) {
+    setFieldInvalid(loginUsernameInput, !payload.username);
+    setFieldInvalid(loginPasswordInput, !payload.password);
+    authError.textContent = "Username and password are required.";
+    return;
+  }
 
   const response = await fetch("/auth/login", {
     method: "POST",
@@ -303,20 +329,31 @@ async function loadAdminUsers() {
 
       setPasswordUser.textContent = `#${userId}`;
       setPasswordInput.value = "";
+      setFieldInvalid(setPasswordInput, false);
       setPasswordModal.dataset.userId = String(userId);
       bindPasswordToggles(setPasswordModal);
-      setPasswordModal.showModal();
+      openDialogA11y(setPasswordModal, setPasswordInput);
     });
   });
 }
 
 createUserForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  setFieldInvalid(newUserUsernameInput, false);
+  setFieldInvalid(newUserPasswordInput, false);
+
   const payload = {
     username: newUserUsernameInput.value.trim(),
     password: newUserPasswordInput.value,
     role: newUserRoleSelect.value,
   };
+
+  if (!payload.username || !payload.password) {
+    setFieldInvalid(newUserUsernameInput, !payload.username);
+    setFieldInvalid(newUserPasswordInput, !payload.password);
+    setAdminMessage("Username and password are required.", true);
+    return;
+  }
 
   const response = await apiFetch("/admin/users", {
     method: "POST",
@@ -396,19 +433,77 @@ async function initializeAdmin() {
 initializeAdmin();
 
 
+
+
+const dialogFocusState = new WeakMap();
+
+function getFocusableWithin(root) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll('a[href], button:not([disabled]), textarea, input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter((el) => !el.hasAttribute('hidden'));
+}
+
+function openDialogA11y(dialog, initialFocusEl) {
+  if (!dialog || dialog.open) return;
+
+  const previous = document.activeElement;
+  const keyHandler = (event) => {
+    if (event.key !== 'Tab') return;
+    const focusables = getFocusableWithin(dialog);
+    if (!focusables.length) return;
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  dialogFocusState.set(dialog, { previous, keyHandler });
+  dialog.addEventListener('keydown', keyHandler);
+  dialog.showModal();
+
+  const target = initialFocusEl || getFocusableWithin(dialog)[0];
+  if (target) target.focus();
+}
+
+function closeDialogA11y(dialog) {
+  if (!dialog || !dialog.open) return;
+  dialog.close();
+}
+
+function cleanupDialogA11y(dialog) {
+  const state = dialogFocusState.get(dialog);
+  if (!state) return;
+  dialog.removeEventListener('keydown', state.keyHandler);
+  if (state.previous && typeof state.previous.focus === 'function') {
+    state.previous.focus();
+  }
+  dialogFocusState.delete(dialog);
+}
 if (closeSetPasswordBtn) {
   closeSetPasswordBtn.addEventListener("click", () => {
-    setPasswordModal.close();
+    closeDialogA11y(setPasswordModal);
   });
 }
+
+setPasswordModal?.addEventListener("close", () => cleanupDialogA11y(setPasswordModal));
 
 if (setPasswordForm) {
   setPasswordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const userId = Number(setPasswordModal.dataset.userId || "0");
     const newPassword = setPasswordInput.value;
+    setFieldInvalid(setPasswordInput, false);
     if (!userId) return;
     if (!newPassword || newPassword.length < 12) {
+      setFieldInvalid(setPasswordInput, true);
       setAdminMessage("Password must be at least 12 characters.", true);
       return;
     }
@@ -426,7 +521,7 @@ if (setPasswordForm) {
     }
 
     setAdminMessage(`Password updated for user #${userId}.`);
-    setPasswordModal.close();
+    closeDialogA11y(setPasswordModal);
   });
 }
 
@@ -438,9 +533,13 @@ async function handleCreateTokenSubmit(event) {
   const submitBtn = createTokenForm.querySelector('button[type="submit"]');
   const defaultBtnText = submitBtn ? submitBtn.textContent : "Create token";
 
+  setFieldInvalid(newTokenNameInput, false);
   const name = newTokenNameInput.value.trim();
   if (!name) {
-    setAdminMessage("Token name is required.", true);
+    setFieldInvalid(newTokenNameInput, true);
+    const msg = "Token name is required.";
+    setAdminMessage(msg, true);
+    if (tokenCreatedLabel) tokenCreatedLabel.textContent = msg;
     return;
   }
 
@@ -452,6 +551,8 @@ async function handleCreateTokenSubmit(event) {
   if (tokenCreatedLabel) {
     tokenCreatedLabel.textContent = "";
   }
+  lastCreatedToken = "";
+  if (copyTokenBtn) copyTokenBtn.disabled = true;
 
   try {
     const payload = { name, scope: "upload" };
@@ -466,6 +567,8 @@ async function handleCreateTokenSubmit(event) {
       const msg = `Create token failed: ${data.detail || response.status}`;
       setAdminMessage(msg, true);
       if (tokenCreatedLabel) tokenCreatedLabel.textContent = msg;
+      lastCreatedToken = "";
+      if (copyTokenBtn) copyTokenBtn.disabled = true;
       return;
     }
 
@@ -475,6 +578,8 @@ async function handleCreateTokenSubmit(event) {
     if (tokenCreatedLabel) {
       tokenCreatedLabel.textContent = `Token (save it now): ${token}`;
     }
+    lastCreatedToken = token;
+    if (copyTokenBtn) copyTokenBtn.disabled = false;
 
     newTokenNameInput.value = "";
     setAdminMessage("Token created. Copy it now; it will not be shown again.");
@@ -494,4 +599,18 @@ async function handleCreateTokenSubmit(event) {
 
 if (createTokenForm) {
   createTokenForm.addEventListener("submit", handleCreateTokenSubmit);
+}
+
+
+if (copyTokenBtn) {
+  copyTokenBtn.addEventListener("click", async () => {
+    if (!lastCreatedToken) return;
+
+    try {
+      await navigator.clipboard.writeText(lastCreatedToken);
+      setAdminMessage("Token copied to clipboard.");
+    } catch {
+      setAdminMessage("Copy failed. Select and copy the token text manually.", true);
+    }
+  });
 }
