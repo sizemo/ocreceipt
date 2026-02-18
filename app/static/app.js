@@ -83,6 +83,10 @@ function setTheme(theme) {
   if (themeSelect) themeSelect.value = normalized;
 }
 
+function setVisualAccessibility(enabled) {
+  document.documentElement.setAttribute("data-visual-accessibility", enabled ? "on" : "off");
+}
+
 
 
 function bindPasswordToggles(root = document) {
@@ -107,6 +111,8 @@ function bindPasswordToggles(root = document) {
   const saved = localStorage.getItem("theme:last");
   setTheme(saved || "midnight");
 })();
+
+setVisualAccessibility(true);
 
 bindPasswordToggles();
 
@@ -200,6 +206,7 @@ async function refreshSession() {
     localStorage.setItem("theme:last", normalizeTheme(data.theme || "midnight"));
     localStorage.setItem(`theme:user:${data.username}`, normalizeTheme(data.theme || "midnight"));
     defaultCurrency = data.default_currency || "USD";
+    setVisualAccessibility(data.visual_accessibility_enabled !== false);
     setSessionLabel();
     setAdminVisibility();
     showAppShell();

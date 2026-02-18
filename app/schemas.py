@@ -79,10 +79,12 @@ class ThemeUpdate(BaseModel):
 
 class SettingsOut(BaseModel):
     default_currency: str
+    visual_accessibility_enabled: bool
 
 
 class SettingsUpdate(BaseModel):
     default_currency: str = Field(min_length=3, max_length=3)
+    visual_accessibility_enabled: bool = True
 
 
 class InstanceResetRequest(BaseModel):

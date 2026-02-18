@@ -226,6 +226,7 @@ def auth_me(user: User = Depends(get_current_user), db: Session = Depends(get_db
         "role": user.role,
         "theme": user.theme_preference or "midnight",
         "default_currency": setting.default_currency,
+        "visual_accessibility_enabled": bool(setting.visual_accessibility_enabled),
     }
 
 
@@ -246,7 +247,10 @@ def update_my_theme(payload: ThemeUpdate, user: User = Depends(get_current_user)
 @app.get("/settings", response_model=SettingsOut)
 def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_db)):
     setting = _get_or_create_settings(db)
-    return SettingsOut(default_currency=setting.default_currency)
+    return SettingsOut(
+        default_currency=setting.default_currency,
+        visual_accessibility_enabled=bool(setting.visual_accessibility_enabled),
+    )
 
 
 @app.post("/receipts/upload", response_model=ReceiptOut)
@@ -658,7 +662,10 @@ def admin_update_user_password(
 @app.get("/admin/settings", response_model=SettingsOut)
 def admin_get_settings(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     setting = _get_or_create_settings(db)
-    return SettingsOut(default_currency=setting.default_currency)
+    return SettingsOut(
+        default_currency=setting.default_currency,
+        visual_accessibility_enabled=bool(setting.visual_accessibility_enabled),
+    )
 
 
 @app.patch("/admin/settings", response_model=SettingsOut)
@@ -669,9 +676,13 @@ def admin_update_settings(payload: SettingsUpdate, db: Session = Depends(get_db)
 
     setting = _get_or_create_settings(db)
     setting.default_currency = currency
+    setting.visual_accessibility_enabled = bool(payload.visual_accessibility_enabled)
     db.commit()
     db.refresh(setting)
-    return SettingsOut(default_currency=setting.default_currency)
+    return SettingsOut(
+        default_currency=setting.default_currency,
+        visual_accessibility_enabled=bool(setting.visual_accessibility_enabled),
+    )
 
 
 @app.post("/admin/reset-instance")
@@ -691,6 +702,7 @@ def admin_reset_instance(
 
     setting = _get_or_create_settings(db)
     setting.default_currency = "USD"
+    setting.visual_accessibility_enabled = True
     db.commit()
 
     if UPLOADS_DIR.exists():
@@ -805,13 +817,14 @@ def _ensure_schema() -> None:
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS extraction_confidence NUMERIC(5,2)"))
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE"))
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference TEXT"))
+        conn.execute(text("ALTER TABLE instance_settings ADD COLUMN IF NOT EXISTS visual_accessibility_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
 
 
 
 def _get_or_create_settings(db: Session) -> InstanceSetting:
     setting = db.scalar(select(InstanceSetting).where(InstanceSetting.id == 1))
     if setting is None:
-        setting = InstanceSetting(id=1, default_currency="USD")
+        setting = InstanceSetting(id=1, default_currency="USD", visual_accessibility_enabled=True)
         db.add(setting)
         db.commit()
         db.refresh(setting)

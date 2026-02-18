@@ -44,6 +44,7 @@ const newUserRoleSelect = document.getElementById("new-user-role");
 
 const settingsForm = document.getElementById("settings-form");
 const defaultCurrencyInput = document.getElementById("default-currency");
+const visualAccessibilityEnabledInput = document.getElementById("visual-accessibility-enabled");
 const resetInstanceBtn = document.getElementById("reset-instance-btn");
 
 const createTokenForm = document.getElementById("create-token-form");
@@ -82,6 +83,10 @@ function setTheme(theme) {
   localStorage.setItem("theme:last", normalized);
   if (currentUser?.username) localStorage.setItem(`theme:user:${currentUser.username}`, normalized);
   if (themeSelect) themeSelect.value = normalized;
+}
+
+function setVisualAccessibility(enabled) {
+  document.documentElement.setAttribute("data-visual-accessibility", enabled ? "on" : "off");
 }
 
 (function initTheme() {
@@ -155,6 +160,7 @@ async function refreshSession() {
     localStorage.setItem("theme:last", normalizeTheme(data.theme || "midnight"));
     localStorage.setItem(`theme:user:${data.username}`, normalizeTheme(data.theme || "midnight"));
     sessionLabel.textContent = `Signed in as ${data.username} (admin)`;
+    setVisualAccessibility(data.visual_accessibility_enabled !== false);
     showAdmin();
     return true;
   } catch {
@@ -378,11 +384,18 @@ async function loadSettings() {
 
   const data = await response.json();
   defaultCurrencyInput.value = data.default_currency || "USD";
+  if (visualAccessibilityEnabledInput) {
+    visualAccessibilityEnabledInput.checked = data.visual_accessibility_enabled !== false;
+  }
+  setVisualAccessibility(data.visual_accessibility_enabled !== false);
 }
 
 settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const payload = { default_currency: defaultCurrencyInput.value.trim().toUpperCase() };
+  const payload = {
+    default_currency: defaultCurrencyInput.value.trim().toUpperCase(),
+    visual_accessibility_enabled: !!visualAccessibilityEnabledInput?.checked,
+  };
 
   const response = await apiFetch("/admin/settings", {
     method: "PATCH",
@@ -396,7 +409,9 @@ settingsForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  setAdminMessage("Default currency updated.");
+  const saved = await response.json().catch(() => payload);
+  setVisualAccessibility(saved.visual_accessibility_enabled !== false);
+  setAdminMessage("Settings updated.");
 });
 
 resetInstanceBtn.addEventListener("click", async () => {

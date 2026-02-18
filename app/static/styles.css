@@ -57,11 +57,14 @@
   --ok: #32d38b;
 }
 
+:root[data-theme="oled"] html {
+  background-color: #000000 !important;
+  background-image: none !important;
+}
+
 :root[data-theme="oled"] body {
   background: #000000;
 }
-
-
 
 :root[data-theme="oled"] input,
 :root[data-theme="oled"] select,
@@ -82,33 +85,44 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  height: 100%;
+  background-color: var(--bg);
 }
 
 html {
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--bg);
+  min-height: -webkit-fill-available;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(1100px 500px at 15% -12%, var(--bg-alt) 0%, transparent 55%),
+    radial-gradient(900px 420px at 92% -18%, color-mix(in srgb, var(--accent) 25%, transparent) 0%, transparent 62%);
+  background-repeat: no-repeat;
+  background-attachment: scroll;
 }
 
 body {
   min-height: 100vh;
   min-height: 100dvh;
+  min-height: -webkit-fill-available;
   font-family: var(--font-sans);
   color: var(--text);
-  background:
-    radial-gradient(1100px 500px at 15% -12%, var(--bg-alt) 0%, transparent 55%),
-    radial-gradient(900px 420px at 92% -18%, color-mix(in srgb, var(--accent) 25%, transparent) 0%, transparent 62%),
-    var(--bg);
-  background-attachment: fixed;
+  background: transparent;
   letter-spacing: -0.01em;
   text-rendering: optimizeLegibility;
 }
 
 .container {
   width: min(1240px, 94vw);
-  margin: 1.9rem auto 2.4rem;
+  margin: 2.1rem auto 2.8rem;
   display: grid;
-  gap: 1.1rem;
+  gap: 1.35rem;
+}
+
+#app-shell,
+#admin-shell {
+  display: grid;
+  gap: 1.25rem;
 }
 
 h1,
@@ -149,7 +163,7 @@ small {
   backdrop-filter: var(--blur-glass);
   -webkit-backdrop-filter: var(--blur-glass);
   box-shadow: var(--shadow-soft);
-  padding: 1rem;
+  padding: 1.2rem;
 }
 
 .auth-card {
@@ -194,7 +208,7 @@ small {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 0.95rem;
+  gap: 1.1rem;
 }
 
 .topbar-actions {
@@ -285,7 +299,7 @@ small {
 
 button,
 .button,
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 select {
   font: inherit;
   min-height: 44px;
@@ -337,7 +351,7 @@ button.danger:hover {
   background: var(--danger-hover);
 }
 
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 select {
   width: 100%;
   border: 1px solid var(--border);
@@ -347,8 +361,8 @@ select {
   color: var(--text);
 }
 
-input[aria-invalid="true"],
-select[aria-invalid="true"] {
+:root:not([data-visual-accessibility="off"]) input[aria-invalid="true"],
+:root:not([data-visual-accessibility="off"]) select[aria-invalid="true"] {
   border-color: color-mix(in srgb, var(--danger) 75%, white 25%);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
 }
@@ -411,7 +425,8 @@ select:focus {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.72rem;
+  gap: 0.9rem;
+  margin-bottom: 0.35rem;
 }
 
 .table-actions {
@@ -422,9 +437,9 @@ select:focus {
 }
 
 .table-filters {
-  margin-top: 0.76rem;
+  margin-top: 0.95rem;
   display: grid;
-  gap: 0.62rem;
+  gap: 0.72rem;
   grid-template-columns: repeat(5, minmax(118px, 1fr));
   align-items: end;
 }
@@ -661,9 +676,9 @@ tr:hover td {
 }
 
 .admin-grid {
-  margin-top: 0.75rem;
+  margin-top: 0.95rem;
   display: grid;
-  gap: 0.75rem;
+  gap: 1rem;
   grid-template-columns: repeat(2, minmax(240px, 1fr));
 }
 
@@ -782,7 +797,13 @@ tr:hover td {
 
 @media (max-width: 760px) {
   .container {
-    margin: 1rem auto 1.5rem;
+    margin: 1rem auto 1.75rem;
+    gap: 1rem;
+  }
+
+  #app-shell,
+  #admin-shell {
+    gap: 0.95rem;
   }
 
   .topbar {
@@ -849,7 +870,7 @@ tr:hover td {
 }
 
 
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+:root:not([data-visual-accessibility="off"]) :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 75%, white 25%);
   outline-offset: 2px;
 }
@@ -871,8 +892,19 @@ tr:hover td {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
 
-  body {
-    background-attachment: scroll;
-  }
+
+.toggle-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  min-height: 1.05rem;
+  margin: 0;
 }

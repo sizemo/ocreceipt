@@ -79,5 +79,6 @@ class InstanceSetting(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     default_currency: Mapped[str] = mapped_column(Text, nullable=False, server_default="USD")
+    visual_accessibility_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
