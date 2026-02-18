@@ -52,6 +52,7 @@ const tokenCreatedLabel = document.getElementById("token-created");
 const apiTokensBody = document.getElementById("api-tokens-body");
 
 let currentUser = null;
+let createTokenInFlight = false;
 
 function normalizeTheme(theme) {
   if (theme === "dark") return "midnight";
@@ -63,6 +64,9 @@ function normalizeTheme(theme) {
 
 async function updateMyThemePreference(theme) {
   if (!currentUser) return;
+  createTokenInFlight = true;
+  if (submitBtn) submitBtn.disabled = true;
+
   try {
     await apiFetch("/users/me/theme", {
       method: "PATCH",
@@ -431,7 +435,10 @@ if (setPasswordForm) {
 
 async function handleCreateTokenSubmit(event) {
   event.preventDefault();
-  if (!newTokenNameInput) return;
+  if (createTokenInFlight) return;
+  if (!newTokenNameInput || !createTokenForm) return;
+
+  const submitBtn = createTokenForm.querySelector('button[type="submit"]');
 
   const name = newTokenNameInput.value.trim();
   if (!name) {
@@ -465,19 +472,12 @@ async function handleCreateTokenSubmit(event) {
     await loadApiTokens();
   } catch (error) {
     setAdminMessage(`Create token failed: ${error?.message || "unexpected error"}`, true);
+  } finally {
+    createTokenInFlight = false;
+    if (submitBtn) submitBtn.disabled = false;
   }
 }
 
 if (createTokenForm) {
-  // Belt-and-suspenders: avoid browser default form navigation.
-  createTokenForm.setAttribute("action", "javascript:void(0)");
   createTokenForm.addEventListener("submit", handleCreateTokenSubmit);
 }
-
-// Fallback delegated handler in case this form is re-rendered.
-document.addEventListener("submit", (event) => {
-  const form = event.target;
-  if (!(form instanceof HTMLFormElement)) return;
-  if (form.id !== "create-token-form") return;
-  handleCreateTokenSubmit(event);
-});
