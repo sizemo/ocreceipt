@@ -620,13 +620,32 @@ tr:hover td {
   margin-bottom: 0.58rem;
 }
 
+.receipt-modal-body {
+  max-height: 74vh;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
 #receipt-modal-image {
   width: 100%;
   height: auto;
-  max-height: 78vh;
   object-fit: contain;
   border-radius: 12px;
   border: 1px solid var(--border);
+}
+
+.receipt-modal-pages {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.receipt-modal-pages img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-strong) 92%, transparent);
 }
 
 #edit-modal-image {

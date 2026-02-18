@@ -137,7 +137,10 @@
         <h3 id="receipt-modal-title">Receipt Preview</h3>
         <button id="close-modal-btn" type="button" class="secondary" aria-label="Close receipt preview">Close</button>
       </div>
-      <img id="receipt-modal-image" alt="Uploaded receipt preview" />
+      <div id="receipt-modal-body" class="receipt-modal-body">
+        <img id="receipt-modal-image" alt="Uploaded receipt preview" hidden />
+        <div id="receipt-modal-pages" class="receipt-modal-pages" hidden></div>
+      </div>
     </dialog>
 
     <dialog id="edit-modal" class="receipt-modal admin-only" aria-modal="true" aria-labelledby="edit-modal-title">

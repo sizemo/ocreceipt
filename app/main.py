@@ -23,7 +23,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from .auth import create_session, delete_session, get_user_by_session_token, hash_api_token, hash_password, verify_password
 from .database import Base, engine, get_db
 from .models import ApiToken, InstanceSetting, Merchant, Receipt, ReceiptImage, User, UserSession
-from .ocr import extract_receipt_fields, render_pdf_preview_image, run_ocr, run_ocr_pdf
+from .ocr import extract_receipt_fields, get_pdf_page_count, render_pdf_preview_image, run_ocr, run_ocr_pdf
 from .schemas import (
     InstanceResetRequest,
     LoginRequest,
@@ -270,9 +270,9 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
     try:
         if is_pdf:
             ocr_result = run_ocr_pdf(uploaded_bytes)
-            saved_bytes = render_pdf_preview_image(uploaded_bytes)
-            saved_content_type = "image/png"
-            saved_name = f"{Path(original_name).stem}.png"
+            saved_bytes = uploaded_bytes
+            saved_content_type = "application/pdf"
+            saved_name = f"{Path(original_name).stem}.pdf"
         else:
             normalized_bytes, normalized_content_type, normalized_name = _normalize_upload_image(uploaded_bytes, original_name, content_type)
             ocr_result = run_ocr(normalized_bytes)
@@ -465,8 +465,7 @@ def list_merchants(
     return {"merchants": names}
 
 
-@app.get("/receipts/{receipt_id}/image")
-def get_receipt_image(receipt_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def _get_receipt_image_record(db: Session, receipt_id: int) -> tuple[ReceiptImage, Path]:
     image = db.scalar(select(ReceiptImage).where(ReceiptImage.receipt_id == receipt_id))
     if image is None:
         raise HTTPException(status_code=404, detail="Receipt image not found")
@@ -475,6 +474,84 @@ def get_receipt_image(receipt_id: int, db: Session = Depends(get_db), _: User = 
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Stored receipt image file is missing")
 
+    return image, image_path
+
+
+def _is_pdf_receipt_image(image: ReceiptImage, image_path: Path) -> bool:
+    content_type = (image.content_type or "").lower()
+    return content_type == "application/pdf" or image_path.suffix.lower() == ".pdf"
+
+
+@app.get("/receipts/{receipt_id}/preview")
+def get_receipt_preview(receipt_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    image, image_path = _get_receipt_image_record(db, receipt_id)
+
+    if not _is_pdf_receipt_image(image, image_path):
+        return {
+            "kind": "image",
+            "page_count": 1,
+            "image_url": f"/receipts/{receipt_id}/preview-image",
+            "pages": [f"/receipts/{receipt_id}/preview-image"],
+        }
+
+    pdf_bytes = image_path.read_bytes()
+    page_count = get_pdf_page_count(pdf_bytes)
+    if page_count <= 0:
+        raise HTTPException(status_code=404, detail="PDF contains no pages")
+
+    pages = [f"/receipts/{receipt_id}/pdf-page/{idx}" for idx in range(1, page_count + 1)]
+    return {
+        "kind": "pdf",
+        "page_count": page_count,
+        "image_url": pages[0],
+        "pages": pages,
+    }
+
+
+@app.get("/receipts/{receipt_id}/preview-image")
+def get_receipt_preview_image(receipt_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    image, image_path = _get_receipt_image_record(db, receipt_id)
+
+    if _is_pdf_receipt_image(image, image_path):
+        try:
+            preview = render_pdf_preview_image(image_path.read_bytes(), page_index=0)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to render PDF preview: {exc}") from exc
+        return Response(content=preview, media_type="image/png")
+
+    return FileResponse(image_path, media_type=image.content_type or "application/octet-stream")
+
+
+@app.get("/receipts/{receipt_id}/pdf-page/{page_number}")
+def get_receipt_pdf_page(
+    receipt_id: int,
+    page_number: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    if page_number < 1:
+        raise HTTPException(status_code=400, detail="page_number must be >= 1")
+
+    image, image_path = _get_receipt_image_record(db, receipt_id)
+    if not _is_pdf_receipt_image(image, image_path):
+        raise HTTPException(status_code=400, detail="Receipt is not a PDF")
+
+    pdf_bytes = image_path.read_bytes()
+    page_count = get_pdf_page_count(pdf_bytes)
+    if page_number > page_count:
+        raise HTTPException(status_code=404, detail="PDF page not found")
+
+    try:
+        rendered = render_pdf_preview_image(pdf_bytes, page_index=page_number - 1)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to render PDF page: {exc}") from exc
+
+    return Response(content=rendered, media_type="image/png")
+
+
+@app.get("/receipts/{receipt_id}/image")
+def get_receipt_image(receipt_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    image, image_path = _get_receipt_image_record(db, receipt_id)
     return FileResponse(image_path, media_type=image.content_type or "application/octet-stream")
 
 
@@ -797,7 +874,7 @@ def _delete_receipt_image(filename: str) -> None:
 
 
 def _serialize_receipt(receipt: Receipt, has_image: bool) -> dict:
-    image_url = f"/receipts/{receipt.id}/image" if has_image else None
+    image_url = f"/receipts/{receipt.id}/preview-image" if has_image else None
     return {
         "id": receipt.id,
         "merchant": receipt.merchant,

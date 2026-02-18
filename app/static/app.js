@@ -25,6 +25,7 @@ const sortStatus = document.getElementById("sort-status");
 
 const receiptModal = document.getElementById("receipt-modal");
 const receiptModalImage = document.getElementById("receipt-modal-image");
+const receiptModalPages = document.getElementById("receipt-modal-pages");
 const closeModalBtn = document.getElementById("close-modal-btn");
 
 const editModal = document.getElementById("edit-modal");
@@ -543,20 +544,80 @@ function cleanupDialogA11y(dialog) {
   }
   dialogFocusState.delete(dialog);
 }
-function viewReceipt(imageUrl) {
-  receiptModalImage.src = imageUrl;
+async function viewReceipt(target) {
+  receiptModalImage.hidden = true;
+  receiptModalImage.src = "";
+  if (receiptModalPages) {
+    receiptModalPages.hidden = false;
+    receiptModalPages.innerHTML = '<p class="muted">Loading receipt preview...</p>';
+  }
+
   openDialogA11y(receiptModal, closeModalBtn);
+
+  if (typeof target !== "number" || Number.isNaN(target)) {
+    receiptModalImage.src = String(target || "");
+    receiptModalImage.hidden = false;
+    if (receiptModalPages) {
+      receiptModalPages.hidden = true;
+      receiptModalPages.innerHTML = "";
+    }
+    return;
+  }
+
+  try {
+    const response = await apiFetch('/receipts/' + target + '/preview');
+    if (!response.ok) throw new Error('Failed to load receipt preview');
+
+    const preview = await response.json();
+    const pages = Array.isArray(preview.pages) ? preview.pages : [];
+
+    if (preview.kind === 'pdf' && pages.length > 0 && receiptModalPages) {
+      receiptModalPages.innerHTML = '';
+      pages.forEach((pageUrl, index) => {
+        const img = document.createElement('img');
+        img.src = pageUrl;
+        img.alt = 'Receipt page ' + (index + 1);
+        img.loading = 'lazy';
+        receiptModalPages.appendChild(img);
+      });
+      receiptModalPages.hidden = false;
+      receiptModalImage.hidden = true;
+      return;
+    }
+
+    receiptModalImage.src = preview.image_url || ('/receipts/' + target + '/preview-image');
+    receiptModalImage.hidden = false;
+    if (receiptModalPages) {
+      receiptModalPages.hidden = true;
+      receiptModalPages.innerHTML = '';
+    }
+  } catch (error) {
+    if (receiptModalPages) {
+      receiptModalPages.hidden = false;
+      receiptModalPages.innerHTML = '<p class="err-text">' + (error.message || 'Failed to load preview.') + '</p>';
+    }
+  }
 }
 
 closeModalBtn.addEventListener("click", () => {
   closeDialogA11y(receiptModal);
   receiptModalImage.src = "";
+  receiptModalImage.hidden = true;
+  if (receiptModalPages) {
+    receiptModalPages.innerHTML = "";
+    receiptModalPages.hidden = true;
+  }
 });
 
 receiptModal.addEventListener("click", (event) => {
   if (event.target === receiptModal) {
     closeDialogA11y(receiptModal);
     receiptModalImage.src = "";
+    receiptModalImage.hidden = true;
+    if (receiptModalPages) {
+      receiptModalPages.innerHTML = "";
+      receiptModalPages.hidden = true;
+    }
   }
 });
 receiptModal.addEventListener("close", () => cleanupDialogA11y(receiptModal));
@@ -571,6 +632,11 @@ function clearEditPreview() {
 
 if (editModalImage) {
   editModalImage.addEventListener("click", () => {
+    const receiptId = Number(editModalImage.dataset.receiptId || "0");
+    if (receiptId) {
+      viewReceipt(receiptId);
+      return;
+    }
     if (editModalImage.src) viewReceipt(editModalImage.src);
   });
 }
@@ -588,6 +654,7 @@ function openEditModal(receiptId) {
   if (editModalImage) {
     if (row.image_url) {
       editModalImage.src = row.image_url;
+      editModalImage.dataset.receiptId = String(row.id);
       editModalImage.hidden = false;
       if (editModalImageHint) editModalImageHint.hidden = false;
     } else {
@@ -892,7 +959,7 @@ function renderReceipts() {
 
   rows.forEach((row) => {
     const receiptCell = row.image_url
-      ? `<button class="secondary table-btn" type="button" data-image-url="${row.image_url}">View</button>`
+      ? `<button class="secondary table-btn" type="button" data-receipt-id="${row.id}">View</button>`
       : '<span class="muted">Missing</span>';
 
     const reviewCell = row.needs_review && admin
@@ -922,8 +989,8 @@ function renderReceipts() {
     receiptsBody.appendChild(tr);
   });
 
-  receiptsBody.querySelectorAll("button[data-image-url]").forEach((button) => {
-    button.addEventListener("click", () => viewReceipt(button.dataset.imageUrl));
+  receiptsBody.querySelectorAll("button[data-receipt-id]").forEach((button) => {
+    button.addEventListener("click", () => viewReceipt(Number(button.dataset.receiptId)));
   });
   receiptsBody.querySelectorAll("button[data-edit-id]").forEach((button) => {
     button.addEventListener("click", () => openEditModal(Number(button.dataset.editId)));

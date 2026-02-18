@@ -216,14 +216,27 @@ def run_ocr_pdf(pdf_bytes: bytes) -> dict:
     }
 
 
-def render_pdf_preview_image(pdf_bytes: bytes) -> bytes:
-    pages = _render_pdf_pages(pdf_bytes, max_pages=1)
-    if not pages:
-        raise ValueError("PDF contains no renderable pages")
+def render_pdf_preview_image(pdf_bytes: bytes, page_index: int = 0) -> bytes:
+    if page_index < 0:
+        raise ValueError("page_index must be >= 0")
+
+    pages = _render_pdf_pages(pdf_bytes, max_pages=page_index + 1)
+    if not pages or page_index >= len(pages):
+        raise ValueError("PDF page is out of range")
 
     preview = io.BytesIO()
-    pages[0].save(preview, format="PNG")
+    pages[page_index].save(preview, format="PNG")
     return preview.getvalue()
+
+
+def get_pdf_page_count(pdf_bytes: bytes) -> int:
+    document = pdfium.PdfDocument(pdf_bytes)
+    try:
+        return int(len(document))
+    finally:
+        close_document = getattr(document, "close", None)
+        if callable(close_document):
+            close_document()
 
 
 def _render_pdf_pages(pdf_bytes: bytes, *, max_pages: int) -> list[Image.Image]:
