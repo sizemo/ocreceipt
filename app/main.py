@@ -59,6 +59,8 @@ DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "change-me-now")
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.getenv("LOGIN_RATE_LIMIT_ATTEMPTS", "8"))
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300"))
 LOGIN_RATE_LIMIT_BLOCK_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_BLOCK_SECONDS", "900"))
+OCR_RETRY_ON_LOW_CONFIDENCE = os.getenv("OCR_RETRY_ON_LOW_CONFIDENCE", "true").strip().lower() == "true"
+OCR_RETRY_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_RETRY_CONFIDENCE_THRESHOLD", "60"))
 
 if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     SESSION_COOKIE_SAMESITE = "strict"
@@ -843,6 +845,34 @@ def _as_decimal(value) -> Decimal | None:
         raise HTTPException(status_code=400, detail=f"Invalid numeric value: {value}") from exc
 
 
+def _extraction_confidence_value(extracted: dict) -> float:
+    raw = extracted.get("extraction_confidence")
+    if raw is None:
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_low_confidence_extraction(extracted: dict) -> bool:
+    return _extraction_confidence_value(extracted) < OCR_RETRY_CONFIDENCE_THRESHOLD
+
+
+def _extraction_quality_score(extracted: dict) -> float:
+    confidence = _extraction_confidence_value(extracted)
+    fields = ("merchant", "purchase_date", "total_amount", "sales_tax_amount")
+    completeness = sum(1 for field in fields if extracted.get(field) is not None)
+    needs_review_penalty = 6.0 if extracted.get("needs_review") else 0.0
+    return confidence + (completeness * 8.0) - needs_review_penalty
+
+
+def _pick_better_extraction(primary: dict, secondary: dict) -> dict:
+    if _extraction_quality_score(secondary) > _extraction_quality_score(primary):
+        return secondary
+    return primary
+
+
 def _normalize_merchant(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
@@ -1006,8 +1036,14 @@ def _process_upload_job(job_id: int) -> None:
         try:
             payload = queue_path.read_bytes()
             is_pdf = (job.content_type or "").lower() == "application/pdf" or queue_path.suffix.lower() == ".pdf"
-            ocr_result = run_ocr_pdf(payload) if is_pdf else run_ocr(payload)
-            extracted = extract_receipt_fields(ocr_result)
+
+            first_ocr_result = run_ocr_pdf(payload, fast_mode=True) if is_pdf else run_ocr(payload, fast_mode=True)
+            extracted = extract_receipt_fields(first_ocr_result)
+
+            if OCR_RETRY_ON_LOW_CONFIDENCE and _is_low_confidence_extraction(extracted):
+                retry_ocr_result = run_ocr_pdf(payload, fast_mode=False) if is_pdf else run_ocr(payload, fast_mode=False)
+                retry_extracted = extract_receipt_fields(retry_ocr_result)
+                extracted = _pick_better_extraction(extracted, retry_extracted)
 
             merchant_name = _normalize_merchant(extracted["merchant"])
             receipt = Receipt(

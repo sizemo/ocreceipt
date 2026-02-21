@@ -53,7 +53,9 @@ def _ocr_quality_score(text: str, avg_conf: float) -> float:
     return score
 
 
-def run_ocr(image_bytes: bytes) -> dict:
+def run_ocr(image_bytes: bytes, fast_mode: bool | None = None) -> dict:
+    effective_fast_mode = OCR_FAST_MODE if fast_mode is None else bool(fast_mode)
+
     base_image = Image.open(io.BytesIO(image_bytes))
     base_image = ImageOps.exif_transpose(base_image).convert("L")
     if max(base_image.size) > OCR_MAX_IMAGE_SIDE:
@@ -67,7 +69,7 @@ def run_ocr(image_bytes: bytes) -> dict:
         if cropped.size != base_image.size:
             candidates.append(cropped)
 
-    if OCR_FAST_MODE:
+    if effective_fast_mode:
         configs = ["--oem 3 --psm 6", "--oem 3 --psm 4"]
         number_configs = ["--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.$%"]
     else:
@@ -88,7 +90,7 @@ def run_ocr(image_bytes: bytes) -> dict:
         if OCR_DESKEW:
             oriented = _deskew_small_angles(oriented)
 
-        variants = _build_variants(oriented)
+        variants = _build_variants(oriented, effective_fast_mode)
 
         best_pass = {"text": "", "avg_confidence": 0.0, "lines": []}
         best_score = -1.0
@@ -196,7 +198,7 @@ def _pick_best_rotation(image: Image.Image) -> Image.Image:
         return best
     except Exception:
         return image
-def run_ocr_pdf(pdf_bytes: bytes) -> dict:
+def run_ocr_pdf(pdf_bytes: bytes, fast_mode: bool | None = None) -> dict:
     pages = _render_pdf_pages(pdf_bytes, max_pages=MAX_PDF_OCR_PAGES)
     if not pages:
         raise ValueError("PDF contains no renderable pages")
@@ -205,7 +207,7 @@ def run_ocr_pdf(pdf_bytes: bytes) -> dict:
     for page_image in pages:
         page_buffer = io.BytesIO()
         page_image.save(page_buffer, format="PNG")
-        per_page_results.append(run_ocr(page_buffer.getvalue()))
+        per_page_results.append(run_ocr(page_buffer.getvalue(), fast_mode=fast_mode))
 
     text_parts = [result.get("text", "") for result in per_page_results if result.get("text")]
     all_lines = [line for result in per_page_results for line in result.get("lines", [])]
@@ -947,7 +949,7 @@ def _deskew_small_angles(image: Image.Image) -> Image.Image:
         return image
 
 
-def _build_variants(image: Image.Image) -> list[Image.Image]:
+def _build_variants(image: Image.Image, fast_mode: bool) -> list[Image.Image]:
     upscaled = image.resize((image.width * 2, image.height * 2)) if min(image.size) < 1600 else image.copy()
 
     autocontrast = ImageOps.autocontrast(upscaled)
@@ -970,4 +972,4 @@ def _build_variants(image: Image.Image) -> list[Image.Image]:
     threshold_170 = denoised.point(lambda px: 0 if px < 170 else 255, mode="1")
 
     variants = [denoised, sharpened, highpass, threshold_otsu, threshold_145, threshold_170]
-    return variants[:3] if OCR_FAST_MODE else variants
+    return variants[:3] if fast_mode else variants

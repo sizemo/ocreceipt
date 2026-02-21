@@ -138,6 +138,13 @@ Security middleware includes:
 - Default currency is configurable in Admin Panel and used in table formatting.
 - Reset Instance keeps the currently logged-in admin but clears receipts/merchants/other users and uploaded images.
 
+## OCR retry tuning
+Uploads run a fast OCR pass first. If extraction confidence is below threshold, the API automatically runs a more expensive full OCR pass and keeps the better result.
+
+Config:
+- `OCR_RETRY_ON_LOW_CONFIDENCE=true`
+- `OCR_RETRY_CONFIDENCE_THRESHOLD=60`
+
 
 ## Password recovery
 If the admin forgets their password, there is no email-based reset (this is intentionally offline/self-hosted).
