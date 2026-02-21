@@ -603,6 +603,40 @@ tr:hover td {
   gap: 0.35rem;
 }
 
+.source-helper {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.55rem 0.62rem;
+  background: color-mix(in srgb, var(--surface-strong) 90%, transparent);
+}
+
+.source-helper h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.source-helper ul {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.source-helper li {
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.source-helper mark {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0 0.14rem;
+}
+
 @media (max-width: 860px) {
   .edit-modal-grid {
     grid-template-columns: 1fr;

@@ -36,6 +36,7 @@ class UploadJob(Base):
     original_filename: Mapped[str] = mapped_column(Text, nullable=False)
     stored_filename: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_sha256: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     receipt_id: Mapped[int | None] = mapped_column(ForeignKey("receipts.id", ondelete="SET NULL"), nullable=True, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

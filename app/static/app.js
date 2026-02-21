@@ -39,6 +39,8 @@ const editTotalInput = document.getElementById("edit-total");
 const editTaxInput = document.getElementById("edit-tax");
 const editModalImage = document.getElementById("edit-modal-image");
 const editModalImageHint = document.getElementById("edit-modal-image-hint");
+const editSourceHelper = document.getElementById("edit-source-helper");
+const editSourceList = document.getElementById("edit-source-list");
 
 const filterDateFromInput = document.getElementById("filter-date-from");
 const filterDateToInput = document.getElementById("filter-date-to");
@@ -55,6 +57,7 @@ let currentUser = null;
 let defaultCurrency = "USD";
 
 let sortState = { key: "created_at", dir: "desc" };
+let currentEditRow = null;
 
 function normalizeTheme(theme) {
   if (theme === "dark") return "midnight";
@@ -670,6 +673,102 @@ function clearEditPreview() {
   if (editModalImageHint) editModalImageHint.hidden = true;
 }
 
+function clearEditSourceHelper() {
+  if (editSourceList) editSourceList.innerHTML = "";
+  if (editSourceHelper) editSourceHelper.hidden = true;
+}
+
+function _normalizeComparable(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9.]/g, "");
+}
+
+function _moneyNeedle(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  return num.toFixed(2);
+}
+
+function _highlightLine(line, needle) {
+  if (!needle) return line;
+  const idx = line.toLowerCase().indexOf(String(needle).toLowerCase());
+  if (idx < 0) return line;
+  return `${line.slice(0, idx)}<mark>${line.slice(idx, idx + needle.length)}</mark>${line.slice(idx + needle.length)}`;
+}
+
+function _findLine(lines, predicate) {
+  for (const line of lines) {
+    if (predicate(line)) return line;
+  }
+  return "";
+}
+
+function renderEditSourceHelper(row) {
+  if (!editSourceHelper || !editSourceList) return;
+  const raw = String(row?.raw_ocr_text || "").trim();
+  if (!raw) {
+    clearEditSourceHelper();
+    return;
+  }
+
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const dateValue = editDateInput?.value || toDateInputValue(row?.purchase_date);
+  const totalValue = _moneyNeedle(editTotalInput?.value !== "" ? editTotalInput.value : row?.total_amount);
+  const taxValue = _moneyNeedle(editTaxInput?.value !== "" ? editTaxInput.value : row?.sales_tax_amount);
+
+  const dateNeedles = [];
+  if (dateValue && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    const [y, m, d] = dateValue.split("-");
+    dateNeedles.push(`${m}/${d}/${y}`);
+    dateNeedles.push(`${m}-${d}-${y}`);
+    dateNeedles.push(`${y}-${m}-${d}`);
+    dateNeedles.push(`${m}/${d}/${y.slice(2)}`);
+  }
+
+  const dateLine = _findLine(lines, (line) => {
+    const low = line.toLowerCase();
+    return dateNeedles.some((needle) => low.includes(needle.toLowerCase())) ||
+      ((low.includes("date") || low.includes("purchase")) && /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(low));
+  });
+
+  const totalLine = _findLine(lines, (line) => {
+    const low = line.toLowerCase();
+    if (!(low.includes("total") || low.includes("amount due") || low.includes("balance due"))) return false;
+    if (low.includes("subtotal") || low.includes("tax")) return false;
+    if (!totalValue) return true;
+    return _normalizeComparable(line).includes(_normalizeComparable(totalValue));
+  });
+
+  const taxLine = _findLine(lines, (line) => {
+    const low = line.toLowerCase();
+    if (!(low.includes("tax") || low.includes("hst") || low.includes("gst") || low.includes("vat"))) return false;
+    if (taxValue && !_normalizeComparable(line).includes(_normalizeComparable(taxValue))) return false;
+    if (/\d+(?:\.\d+)?\s*%/.test(line) && !/\$\s*\d+\.\d{2}/.test(line)) return false;
+    return true;
+  });
+
+  const items = [
+    { label: "Date", line: dateLine, needle: dateNeedles[0] || "" },
+    { label: "Total", line: totalLine, needle: totalValue },
+    { label: "Sales tax", line: taxLine, needle: taxValue },
+  ];
+
+  editSourceList.innerHTML = "";
+  let found = 0;
+  for (const item of items) {
+    const li = document.createElement("li");
+    if (item.line) {
+      found += 1;
+      li.innerHTML = `<strong>${item.label}:</strong> ${_highlightLine(item.line, item.needle)}`;
+    } else {
+      li.innerHTML = `<strong>${item.label}:</strong> <span class="muted">No likely source line found.</span>`;
+    }
+    editSourceList.appendChild(li);
+  }
+
+  editSourceHelper.hidden = found === 0;
+}
+
 if (editModalImage) {
   editModalImage.addEventListener("click", () => {
     const receiptId = Number(editModalImage.dataset.receiptId || "0");
@@ -685,6 +784,7 @@ function openEditModal(receiptId) {
   if (!isAdmin()) return;
   const row = receiptRows.find((item) => item.id === receiptId);
   if (!row) return;
+  currentEditRow = row;
 
   editIdInput.value = String(row.id);
   editDateInput.value = toDateInputValue(row.purchase_date);
@@ -704,12 +804,15 @@ function openEditModal(receiptId) {
     }
   }
   hideMerchantSuggestions();
+  renderEditSourceHelper(row);
   openDialogA11y(editModal, editDateInput);
 }
 
 cancelEditBtn.addEventListener("click", () => {
   hideMerchantSuggestions();
   clearEditPreview();
+  clearEditSourceHelper();
+  currentEditRow = null;
   closeDialogA11y(editModal);
 });
 
@@ -717,10 +820,16 @@ editModal.addEventListener("click", (event) => {
   if (event.target === editModal) {
     hideMerchantSuggestions();
     clearEditPreview();
+    clearEditSourceHelper();
+    currentEditRow = null;
     closeDialogA11y(editModal);
   }
 });
-editModal.addEventListener("close", () => cleanupDialogA11y(editModal));
+editModal.addEventListener("close", () => {
+  cleanupDialogA11y(editModal);
+  clearEditSourceHelper();
+  currentEditRow = null;
+});
 
 function showMerchantSuggestions(names) {
   merchantSuggestions.innerHTML = "";
@@ -776,6 +885,13 @@ editMerchantInput.addEventListener("input", () => {
 
 editMerchantInput.addEventListener("blur", () => setTimeout(hideMerchantSuggestions, 120));
 
+[editDateInput, editTotalInput, editTaxInput].forEach((el) => {
+  if (!el) return;
+  el.addEventListener("input", () => {
+    if (currentEditRow) renderEditSourceHelper(currentEditRow);
+  });
+});
+
 async function saveEdit(event) {
   event.preventDefault();
   if (!isAdmin()) return;
@@ -800,6 +916,8 @@ async function saveEdit(event) {
   appendStatus(`Updated receipt #${receiptId}.`, "ok");
   hideMerchantSuggestions();
   clearEditPreview();
+  clearEditSourceHelper();
+  currentEditRow = null;
   closeDialogA11y(editModal);
   await loadMerchantFilterOptions();
   await loadReceipts();

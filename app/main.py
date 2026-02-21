@@ -1,12 +1,14 @@
 import csv
+import hashlib
 import io
 import os
 import re
 import shutil
 import secrets
+import multiprocessing as mp
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -24,7 +26,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from .auth import create_session, delete_session, get_user_by_session_token, hash_api_token, hash_password, verify_password
 from .database import Base, engine, get_db
 from .models import ApiToken, InstanceSetting, Merchant, Receipt, ReceiptImage, UploadJob, User, UserSession
-from .ocr import extract_receipt_fields, get_pdf_page_count, render_pdf_preview_image, run_ocr, run_ocr_pdf
+from .ocr import extract_receipt_fields, get_pdf_page_count, render_pdf_preview_image, run_ocr, run_ocr_pdf, write_ocr_debug_report
 from .schemas import (
     InstanceResetRequest,
     LoginRequest,
@@ -61,6 +63,12 @@ LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS
 LOGIN_RATE_LIMIT_BLOCK_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_BLOCK_SECONDS", "900"))
 OCR_RETRY_ON_LOW_CONFIDENCE = os.getenv("OCR_RETRY_ON_LOW_CONFIDENCE", "true").strip().lower() == "true"
 OCR_RETRY_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_RETRY_CONFIDENCE_THRESHOLD", "60"))
+OCR_RETRY_FULL_MODE_ENABLED = os.getenv("OCR_RETRY_FULL_MODE_ENABLED", "false").strip().lower() == "true"
+OCR_JOB_TIMEOUT_SEC = int(os.getenv("OCR_JOB_TIMEOUT_SEC", "120"))
+UPLOAD_DEDUPE_WINDOW_SECONDS = int(os.getenv("UPLOAD_DEDUPE_WINDOW_SECONDS", "900"))
+OCR_DEBUG_ON_LOW_CONFIDENCE = os.getenv("OCR_DEBUG_ON_LOW_CONFIDENCE", "true").strip().lower() == "true"
+OCR_DEBUG_DIR = Path(os.getenv("OCR_DEBUG_DIR", str(UPLOADS_DIR / "debug")))
+OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     SESSION_COOKIE_SAMESITE = "strict"
@@ -111,7 +119,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(STATIC_DIR / "index.html")
-
 
 
 @app.get("/health")
@@ -189,8 +196,6 @@ def require_upload_auth(
     return user
 
 
-
-
 @app.post("/auth/login")
 def login(payload: LoginRequest, response: Response, request: Request, db: Session = Depends(get_db)):
     username = payload.username.strip().lower()
@@ -248,6 +253,7 @@ def _start_upload_worker() -> None:
     _UPLOAD_WORKER_STOP.clear()
     _UPLOAD_WORKER_THREAD = threading.Thread(target=_upload_worker_loop, name="upload-worker", daemon=True)
     _UPLOAD_WORKER_THREAD.start()
+    _clear_stale_processing_jobs()
     _requeue_incomplete_upload_jobs()
 
 
@@ -261,8 +267,6 @@ def _stop_upload_worker() -> None:
     if _UPLOAD_WORKER_THREAD and _UPLOAD_WORKER_THREAD.is_alive():
         _UPLOAD_WORKER_THREAD.join(timeout=2)
     _UPLOAD_WORKER_THREAD = None
-
-
 
 
 @app.patch("/users/me/theme")
@@ -307,12 +311,30 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
     else:
         saved_bytes, saved_content_type, saved_name = _normalize_upload_image(uploaded_bytes, original_name, content_type)
 
+    file_sha256 = hashlib.sha256(saved_bytes).hexdigest()
+
+    # Guard against accidental duplicate submits for the same file.
+    dedupe_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(60, UPLOAD_DEDUPE_WINDOW_SECONDS))
+    existing_job = db.scalar(
+        select(UploadJob)
+        .where(
+            UploadJob.created_by_user_id == user.id,
+            UploadJob.file_sha256 == file_sha256,
+            UploadJob.created_at >= dedupe_cutoff,
+            UploadJob.status.in_(["queued", "processing", "completed"]),
+        )
+        .order_by(UploadJob.id.desc())
+    )
+    if existing_job is not None:
+        return _serialize_upload_job(existing_job)
+
     queue_filename = _save_upload_queue_file(saved_name, saved_bytes)
     job = UploadJob(
         status="queued",
         original_filename=original_name,
         stored_filename=queue_filename,
         content_type=saved_content_type,
+        file_sha256=file_sha256,
         created_by_user_id=user.id,
         error_message=None,
     )
@@ -649,8 +671,6 @@ def export_receipts_csv(
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
 
 
-
-
 @app.get("/admin/api-tokens", response_model=list[ApiTokenOut])
 def admin_list_api_tokens(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     tokens = db.scalars(select(ApiToken).order_by(ApiToken.created_at.desc())).all()
@@ -677,8 +697,6 @@ def admin_create_api_token(payload: ApiTokenCreate, db: Session = Depends(get_db
     scope = (payload.scope or 'upload').strip().lower()
     if scope != 'upload':
         raise HTTPException(status_code=400, detail='Only upload-scoped tokens are supported')
-
-    import secrets
 
     raw = 'ocrt_' + secrets.token_urlsafe(48)
     token_hash = hash_api_token(raw)
@@ -873,6 +891,31 @@ def _pick_better_extraction(primary: dict, secondary: dict) -> dict:
     return primary
 
 
+def _write_upload_debug_artifacts(job_id: int, payload: bytes, extracted: dict, context: str, original_filename: str | None) -> None:
+    if not OCR_DEBUG_ON_LOW_CONFIDENCE:
+        return
+
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (original_filename or "receipt"))[:120]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    folder = OCR_DEBUG_DIR / f"job_{job_id}_{stamp}"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(original_filename or "").suffix.lower()
+    if not ext or len(ext) > 8:
+        ext = ".bin"
+
+    original_path = folder / f"{safe_name}{ext}"
+    original_path.write_bytes(payload)
+
+    report = {
+        "job_id": job_id,
+        "context": context,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "extracted": extracted,
+    }
+    write_ocr_debug_report(str(folder / "ocr_debug_report.json"), report)
+
+
 def _normalize_merchant(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
@@ -987,6 +1030,32 @@ def _enqueue_upload_job(job_id: int) -> None:
         _UPLOAD_QUEUE_COND.notify()
 
 
+def _clear_stale_processing_jobs() -> None:
+    cutoff_seconds = max(60, OCR_JOB_TIMEOUT_SEC + 30)
+    with Session(bind=engine) as db:
+        rows = db.scalars(select(UploadJob).where(UploadJob.status == "processing")).all()
+        now = datetime.now(timezone.utc)
+        changed = False
+        for job in rows:
+            started = job.started_at
+            if started is None:
+                job.status = "failed"
+                job.completed_at = now
+                job.error_message = "OCR job recovered as stale processing state"
+                db.add(job)
+                changed = True
+                continue
+            elapsed = (now - started).total_seconds()
+            if elapsed > cutoff_seconds:
+                job.status = "failed"
+                job.completed_at = now
+                job.error_message = f"OCR job recovered as stale after {int(elapsed)}s"
+                db.add(job)
+                changed = True
+        if changed:
+            db.commit()
+
+
 def _requeue_incomplete_upload_jobs() -> None:
     with Session(bind=engine) as db:
         pending = db.scalars(select(UploadJob.id).where(UploadJob.status.in_(["queued", "processing"]))).all()
@@ -1010,7 +1079,25 @@ def _upload_worker_loop() -> None:
                 job_id = _UPLOAD_QUEUE.pop(0)
 
         if job_id is not None:
-            _process_upload_job(job_id)
+            _process_upload_job_with_timeout(job_id)
+
+
+def _process_upload_job_with_timeout(job_id: int) -> None:
+    ctx = mp.get_context("spawn")
+    proc = ctx.Process(target=_process_upload_job, args=(job_id,), daemon=True)
+
+    try:
+        proc.start()
+    except Exception as exc:
+        _mark_upload_job_failed(job_id, f"OCR worker start failed: {exc}")
+        return
+
+    proc.join(timeout=max(10, OCR_JOB_TIMEOUT_SEC))
+
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(timeout=2)
+        _mark_upload_job_failed(job_id, f"OCR job timed out after {OCR_JOB_TIMEOUT_SEC}s")
 
 
 def _process_upload_job(job_id: int) -> None:
@@ -1040,15 +1127,19 @@ def _process_upload_job(job_id: int) -> None:
             first_ocr_result = run_ocr_pdf(payload, fast_mode=True) if is_pdf else run_ocr(payload, fast_mode=True)
             extracted = extract_receipt_fields(first_ocr_result)
 
-            if OCR_RETRY_ON_LOW_CONFIDENCE and _is_low_confidence_extraction(extracted):
+            if OCR_RETRY_ON_LOW_CONFIDENCE and OCR_RETRY_FULL_MODE_ENABLED and _is_low_confidence_extraction(extracted):
                 retry_ocr_result = run_ocr_pdf(payload, fast_mode=False) if is_pdf else run_ocr(payload, fast_mode=False)
                 retry_extracted = extract_receipt_fields(retry_ocr_result)
                 extracted = _pick_better_extraction(extracted, retry_extracted)
 
+            if _is_low_confidence_extraction(extracted):
+                _write_upload_debug_artifacts(job.id, payload, extracted, "low_confidence_final", job.original_filename)
+
             merchant_name = _normalize_merchant(extracted["merchant"])
+            purchase_date_value = extracted.get("purchase_date") or datetime.now(timezone.utc).date()
             receipt = Receipt(
                 merchant=merchant_name,
-                purchase_date=extracted["purchase_date"],
+                purchase_date=purchase_date_value,
                 total_amount=_as_decimal(extracted["total_amount"]),
                 sales_tax_amount=_as_decimal(extracted["sales_tax_amount"]),
                 extraction_confidence=_as_decimal(extracted.get("extraction_confidence")),
@@ -1073,6 +1164,10 @@ def _process_upload_job(job_id: int) -> None:
             db.commit()
         except Exception as exc:
             db.rollback()
+            try:
+                _write_upload_debug_artifacts(job.id, payload, {"error": str(exc)}, "processing_exception", job.original_filename)
+            except Exception:
+                pass
             _mark_upload_job_failed(job_id, str(exc))
             return
         finally:
@@ -1097,7 +1192,7 @@ def _ensure_schema() -> None:
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE"))
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference TEXT"))
         conn.execute(text("ALTER TABLE instance_settings ADD COLUMN IF NOT EXISTS visual_accessibility_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
-
+        conn.execute(text("ALTER TABLE upload_jobs ADD COLUMN IF NOT EXISTS file_sha256 TEXT"))
 
 
 def _get_or_create_settings(db: Session) -> InstanceSetting:

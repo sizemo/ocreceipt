@@ -144,7 +144,11 @@ Uploads run a fast OCR pass first. If extraction confidence is below threshold, 
 Config:
 - `OCR_RETRY_ON_LOW_CONFIDENCE=true`
 - `OCR_RETRY_CONFIDENCE_THRESHOLD=60`
+- `OCR_DEBUG_ON_LOW_CONFIDENCE=true` (writes debug bundles for poor OCR outputs)
 
+
+
+Debug bundles are written under `/app/app/uploads/debug` by default and include the original file plus `ocr_debug_report.json` with extracted fields.
 
 ## Password recovery
 If the admin forgets their password, there is no email-based reset (this is intentionally offline/self-hosted).

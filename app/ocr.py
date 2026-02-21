@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 from datetime import date
@@ -32,11 +33,15 @@ OCR_DESKEW_DEGREES = float(os.getenv("OCR_DESKEW_DEGREES", "3"))
 OCR_DESKEW_STEP = float(os.getenv("OCR_DESKEW_STEP", "1.0"))
 OCR_PERSPECTIVE = os.getenv("OCR_PERSPECTIVE", "true").strip().lower() == "true"
 OCR_FAST_MODE = os.getenv("OCR_FAST_MODE", "true").strip().lower() == "true"
-OCR_MAX_IMAGE_SIDE = int(os.getenv("OCR_MAX_IMAGE_SIDE", "1600"))
+OCR_MAX_IMAGE_SIDE = int(os.getenv("OCR_MAX_IMAGE_SIDE", "2600"))
 OCR_TESS_TIMEOUT_SEC = int(os.getenv("OCR_TESS_TIMEOUT_SEC", "10"))
 OCR_OSD_TIMEOUT_SEC = int(os.getenv("OCR_OSD_TIMEOUT_SEC", "3"))
-
-
+def write_ocr_debug_report(path: str, payload: dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+    except Exception:
+        pass
 
 
 def _ocr_quality_score(text: str, avg_conf: float) -> float:
@@ -45,11 +50,17 @@ def _ocr_quality_score(text: str, avg_conf: float) -> float:
     digits = sum(ch.isdigit() for ch in low)
     keywords = ("total", "tax", "subtotal", "amount", "visa", "mastercard", "cashier", "order")
     hits = sum(1 for k in keywords if k in low)
+    amount_hits = len(re.findall(r"\b\d+\.\d{2}\b", low))
 
     score = float(avg_conf or 0.0)
     score += min(35.0, letters / 55.0)
     score += min(20.0, digits / 45.0)
     score += hits * 10.0
+    score += min(36.0, amount_hits * 6.0)
+
+    # Penalize OCR blobs with almost no receipt-like numeric amounts.
+    if amount_hits == 0:
+        score -= 20.0
     return score
 
 
@@ -83,55 +94,61 @@ def run_ocr(image_bytes: bytes, fast_mode: bool | None = None) -> dict:
     best_overall_score = -1.0
 
     for candidate in candidates:
-        oriented = _pick_best_rotation(candidate)
+        base_oriented = _pick_best_rotation(candidate)
+
+        geometry_candidates: list[Image.Image] = [base_oriented]
         if OCR_PERSPECTIVE:
-            oriented = _perspective_correct(oriented)
-        oriented = _orient_image(oriented)
-        if OCR_DESKEW:
-            oriented = _deskew_small_angles(oriented)
+            warped = _perspective_correct(base_oriented)
+            if warped.size != base_oriented.size:
+                geometry_candidates.append(warped)
 
-        variants = _build_variants(oriented, effective_fast_mode)
+        for geom in geometry_candidates:
+            oriented = _orient_image(geom)
+            if OCR_DESKEW:
+                oriented = _deskew_small_angles(oriented)
 
-        best_pass = {"text": "", "avg_confidence": 0.0, "lines": []}
-        best_score = -1.0
-        best_variant = variants[0]
+            variants = _build_variants(oriented, effective_fast_mode)
 
-        for variant in variants:
-            for config in configs:
-                parsed = _ocr_with_confidence(variant, config)
-                score = _ocr_quality_score(parsed.get("text", ""), parsed.get("avg_confidence", 0.0))
-                if score > best_score:
-                    best_score = score
-                    best_pass = parsed
-                    best_variant = variant
+            best_pass = {"text": "", "avg_confidence": 0.0, "lines": []}
+            best_score = -1.0
+            best_variant = variants[0]
 
-        top_pass = _ocr_region(best_variant, 0.0, 0.35, configs)
-        bottom_pass = _ocr_region(best_variant, 0.5, 1.0, configs)
-        bottom_numbers_pass = _ocr_region(best_variant, 0.55, 1.0, number_configs)
+            for variant in variants:
+                for config in configs:
+                    parsed = _ocr_with_confidence(variant, config)
+                    score = _ocr_quality_score(parsed.get("text", ""), parsed.get("avg_confidence", 0.0))
+                    if score > best_score:
+                        best_score = score
+                        best_pass = parsed
+                        best_variant = variant
 
-        result = {
-            "text": best_pass["text"],
-            "lines": best_pass["lines"],
-            "avg_confidence": best_pass["avg_confidence"],
-            "top_text": top_pass["text"],
-            "top_lines": top_pass["lines"],
-            "top_confidence": top_pass["avg_confidence"],
-            "bottom_text": bottom_pass["text"],
-            "bottom_lines": bottom_pass["lines"],
-            "bottom_confidence": bottom_pass["avg_confidence"],
-            "bottom_numbers_text": bottom_numbers_pass["text"],
-            "bottom_numbers_lines": bottom_numbers_pass["lines"],
-            "bottom_numbers_confidence": bottom_numbers_pass["avg_confidence"],
-        }
+            top_pass = _ocr_region(best_variant, 0.0, 0.35, configs)
+            bottom_pass = _ocr_region(best_variant, 0.5, 1.0, configs)
+            bottom_numbers_pass = _ocr_region(best_variant, 0.55, 1.0, number_configs)
 
-        overall_score = _ocr_quality_score(result.get("text", ""), result.get("avg_confidence", 0.0))
-        overall_score += 0.6 * _ocr_quality_score(result.get("top_text", ""), result.get("top_confidence", 0.0))
-        overall_score += 0.8 * _ocr_quality_score(result.get("bottom_text", ""), result.get("bottom_confidence", 0.0))
-        overall_score += 1.0 * _ocr_quality_score(result.get("bottom_numbers_text", ""), result.get("bottom_numbers_confidence", 0.0))
+            result = {
+                "text": best_pass["text"],
+                "lines": best_pass["lines"],
+                "avg_confidence": best_pass["avg_confidence"],
+                "top_text": top_pass["text"],
+                "top_lines": top_pass["lines"],
+                "top_confidence": top_pass["avg_confidence"],
+                "bottom_text": bottom_pass["text"],
+                "bottom_lines": bottom_pass["lines"],
+                "bottom_confidence": bottom_pass["avg_confidence"],
+                "bottom_numbers_text": bottom_numbers_pass["text"],
+                "bottom_numbers_lines": bottom_numbers_pass["lines"],
+                "bottom_numbers_confidence": bottom_numbers_pass["avg_confidence"],
+            }
 
-        if overall_score > best_overall_score:
-            best_overall_score = overall_score
-            best_overall = result
+            overall_score = _ocr_quality_score(result.get("text", ""), result.get("avg_confidence", 0.0))
+            overall_score += 0.6 * _ocr_quality_score(result.get("top_text", ""), result.get("top_confidence", 0.0))
+            overall_score += 0.8 * _ocr_quality_score(result.get("bottom_text", ""), result.get("bottom_confidence", 0.0))
+            overall_score += 1.0 * _ocr_quality_score(result.get("bottom_numbers_text", ""), result.get("bottom_numbers_confidence", 0.0))
+
+            if overall_score > best_overall_score:
+                best_overall_score = overall_score
+                best_overall = result
 
     return best_overall or {
         "text": "",
@@ -147,9 +164,6 @@ def run_ocr(image_bytes: bytes, fast_mode: bool | None = None) -> dict:
         "bottom_numbers_lines": [],
         "bottom_numbers_confidence": 0.0,
     }
-
-
-
 
 
 def _pick_best_rotation(image: Image.Image) -> Image.Image:
@@ -302,17 +316,15 @@ def extract_receipt_fields(ocr_result: dict) -> dict:
     )
 
     merchant, merchant_conf = parse_merchant(top_lines + combined_lines, line_confidences)
+    merchant = _normalize_merchant_candidate(merchant, top_lines + combined_lines)
     purchase_date, date_conf = parse_date(top_lines + combined_lines, line_confidences)
     total_amount, total_conf = parse_total(bottom_lines + combined_lines, line_confidences)
     sales_tax_amount, tax_conf = parse_sales_tax(bottom_lines + combined_lines, line_confidences)
 
-    # Guardrail: sales tax should not be a large fraction of the total.
-    # This avoids misreading tax *rate* (e.g. 8.25%) as the tax *amount*.
     if sales_tax_amount is not None and total_amount is not None:
-        if sales_tax_amount < Decimal('0') or sales_tax_amount > (total_amount * Decimal('0.25')):
+        if sales_tax_amount < Decimal("0") or sales_tax_amount > (total_amount * Decimal("0.25")):
             sales_tax_amount = None
             tax_conf = 0.0
-
 
     subtotal_amount = _find_keyword_amount(_normalize_lines("\n".join(bottom_lines + combined_lines)), ["subtotal", "sub total"])
     if sales_tax_amount is None and subtotal_amount is not None and total_amount is not None:
@@ -321,12 +333,14 @@ def extract_receipt_fields(ocr_result: dict) -> dict:
             sales_tax_amount = delta
             tax_conf = max(tax_conf, 40.0)
 
-    extraction_confidence = _compute_overall_confidence(
-        pass_conf=max(
-            ocr_result.get("avg_confidence", 0.0),
-            ocr_result.get("top_confidence", 0.0),
-            ocr_result.get("bottom_confidence", 0.0),
-        ),
+    pass_conf = max(
+        ocr_result.get("avg_confidence", 0.0),
+        ocr_result.get("top_confidence", 0.0),
+        ocr_result.get("bottom_confidence", 0.0),
+    )
+
+    extraction_confidence, confidence_breakdown = _compute_overall_confidence(
+        pass_conf=pass_conf,
         merchant_conf=merchant_conf,
         date_conf=date_conf,
         total_conf=total_conf,
@@ -344,33 +358,101 @@ def extract_receipt_fields(ocr_result: dict) -> dict:
         "sales_tax_amount": sales_tax_amount,
         "raw_ocr_text": raw_text,
         "extraction_confidence": extraction_confidence,
+        "confidence_breakdown": confidence_breakdown,
         "needs_review": extraction_confidence < 78.0,
     }
+
+
+def _normalize_merchant_candidate(merchant: str | None, lines: list[str]) -> str | None:
+    if not merchant:
+        return None
+
+    cleaned = re.sub(r"^[^A-Za-z0-9]+", "", merchant).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        return None
+
+    low = cleaned.lower()
+    line_blob = "\n".join(lines).lower()
+
+    if "costco" in line_blob and ("wholesale" in low or "wholesale" in line_blob):
+        return "Costco Wholesale"
+
+    # Drop obviously non-merchant OCR debris.
+    alpha = sum(ch.isalpha() for ch in cleaned)
+    digits = sum(ch.isdigit() for ch in cleaned)
+    if alpha < 3 or digits > 6:
+        return None
+
+    return cleaned[:200]
 
 
 def parse_merchant(lines: list[str], line_confidences: dict[str, float]) -> tuple[str | None, float]:
     if not lines:
         return None, 0.0
 
-    blacklist = ["invoice", "receipt", "order", "store", "thank", "date", "time", "cashier", "join", "earn", "points", "rewards"]
-    for line in lines[:12]:
-        low = line.lower()
+    blacklist = {
+        "invoice", "receipt", "order", "thank", "date", "time", "cashier", "join", "earn", "points", "rewards",
+        "subtotal", "total", "tax", "visa", "mastercard", "debit", "credit", "member", "tran", "resp", "aid", "basket", "count", "court",
+    }
+    address_tokens = {"st", "street", "ave", "avenue", "rd", "road", "blvd", "lane", "ln", "way", "dr", "drive", "tx", "ca", "fl", "ny", "zip"}
+
+    best_line: str | None = None
+    best_score = -1.0
+
+    for idx, line in enumerate(lines[:24]):
+        raw = line.strip()
+        if not raw:
+            continue
+
+        low = raw.lower()
         if any(token in low for token in blacklist):
             continue
-        if sum(ch.isalpha() for ch in line) < 3:
+
+        alpha = sum(ch.isalpha() for ch in raw)
+        digits = sum(ch.isdigit() for ch in raw)
+        if alpha < 3:
             continue
-        digit_count = sum(ch.isdigit() for ch in line)
-        if digit_count > 8:
+        if digits > 6:
             continue
 
-        # Allow trailing store numbers like "Taco Bell 027825" but store just the name.
-        candidate = re.sub(r"\s+[0-9]{4,8}$", "", line).strip()
-        if digit_count > 4 and candidate and sum(ch.isalpha() for ch in candidate) >= 3:
-            return candidate[:200], _line_confidence(line, line_confidences)
-
-        if digit_count > 4:
+        words = [w for w in re.split(r"\s+", low) if w]
+        if not words:
             continue
-        return line[:200], _line_confidence(line, line_confidences)
+
+        # Avoid address-like lines.
+        if any(w in address_tokens for w in words):
+            continue
+        if re.search(r"\b\d{5}(?:-\d{4})?\b", raw):
+            continue
+
+        score = 0.0
+        score += max(0.0, 24.0 - idx * 1.3)
+        score += min(14.0, alpha * 0.5)
+        score -= digits * 1.5
+
+        # Penalize long/noisy OCR lines.
+        if len(raw) > 32:
+            score -= min(18.0, (len(raw) - 32) * 0.8)
+        if re.search(r"(.)\1\1", raw):
+            score -= 16.0
+        symbol_ratio = sum(1 for ch in raw if not ch.isalnum() and not ch.isspace()) / max(1, len(raw))
+        if symbol_ratio > 0.12:
+            score -= 10.0
+
+        # Prefer brand/header-like text.
+        upper_ratio = sum(1 for ch in raw if ch.isupper()) / max(1, alpha)
+        if upper_ratio > 0.72:
+            score += 12.0
+        if 1 <= len(words) <= 4:
+            score += 10.0
+
+        if score > best_score:
+            best_score = score
+            best_line = raw[:200]
+
+    if best_line:
+        return best_line, _line_confidence(best_line, line_confidences)
 
     fallback = lines[0][:200]
     return fallback, _line_confidence(fallback, line_confidences)
@@ -392,9 +474,6 @@ def parse_date(lines: list[str], line_confidences: dict[str, float]) -> tuple[da
                 if parsed:
                     return parsed, _line_confidence(line, line_confidences)
 
-        parsed_inline = _safe_parse_date(candidate_line)
-        if parsed_inline:
-            return parsed_inline, _line_confidence(line, line_confidences)
 
     return None, 0.0
 
@@ -413,8 +492,10 @@ def parse_sales_tax(lines: list[str], line_confidences: dict[str, float]) -> tup
             continue
 
         proximity_boost = max(0.0, 12 - idx * 0.4)
-        score = _line_confidence(line, line_confidences) + proximity_boost
-        candidates.append((amount, _line_confidence(line, line_confidences), score))
+        keyword_boost = 10.0 if "sales tax" in line_lower or "state tax" in line_lower else 4.0
+        conf = _line_confidence(line, line_confidences)
+        score = conf + proximity_boost + keyword_boost
+        candidates.append((amount, conf, score))
 
     if not candidates:
         return None, 0.0
@@ -426,13 +507,13 @@ def parse_sales_tax(lines: list[str], line_confidences: dict[str, float]) -> tup
 def parse_total(lines: list[str], line_confidences: dict[str, float]) -> tuple[Decimal | None, float]:
     reversed_lines = list(reversed(lines))
 
-    priority_keywords = ["grand total", "amount due", "balance due", "total"]
+    priority_keywords = ["grand total", "amount due", "balance due"]
     ignore_keywords = ["subtotal", "sub total", "tax", "change", "tender", "discount"]
 
     subtotal = _find_keyword_amount(reversed_lines, ["subtotal", "sub total"])
     tax = _find_keyword_amount(reversed_lines, ["sales tax", "state tax", "tax", "hst", "gst", "vat"])
 
-    candidates: list[tuple[Decimal, float, float]] = []
+    candidates: list[tuple[Decimal, float, float, bool]] = []
     for idx, line in enumerate(reversed_lines[:80]):
         amount = _extract_amount_from_line(line, prefer_non_percent=True, prefer_rightmost=False)
         if amount is None:
@@ -440,29 +521,65 @@ def parse_total(lines: list[str], line_confidences: dict[str, float]) -> tuple[D
 
         line_lower = line.lower()
         conf = _line_confidence(line, line_confidences)
-        score = conf
 
-        if any(keyword in line_lower for keyword in priority_keywords):
-            score += 35
+        has_subtotal = "subtotal" in line_lower or "sub total" in line_lower
+        has_tax_word = "tax" in line_lower
+        has_explicit_total = any(keyword in line_lower for keyword in priority_keywords) or (
+            "total" in line_lower and not has_subtotal
+        )
+
+        # Subtotal lines are not final totals.
+        if has_subtotal:
+            continue
+
+        score = conf
+        if has_explicit_total:
+            score += 42
+        if has_tax_word:
+            score -= 12
         if any(keyword in line_lower for keyword in ignore_keywords):
             score -= 18
 
         score += max(0.0, 14 - idx * 0.6)
 
         if subtotal is not None and tax is not None:
-            delta = abs((subtotal + tax) - amount)
+            inferred = subtotal + tax
+            delta = abs(inferred - amount)
             if delta <= Decimal("0.03"):
-                score += 28
+                score += 34
             elif delta <= Decimal("0.20"):
-                score += 8
+                score += 10
 
-        candidates.append((amount, conf, score))
+        candidates.append((amount, conf, score, has_explicit_total))
 
-    if not candidates:
+    best_amount: Decimal | None = None
+    best_conf = 0.0
+    best_score = -1.0
+    best_is_explicit_total = False
+
+    if candidates:
+        best_amount, best_conf, best_score, best_is_explicit_total = max(candidates, key=lambda item: item[2])
+
+    # If we have clean subtotal+tax math and no strong explicit TOTAL candidate, use inferred total.
+    if subtotal is not None and tax is not None:
+        inferred_total = subtotal + tax
+        if best_amount is None:
+            return inferred_total, max(best_conf, 55.0)
+
+        close_to_subtotal = abs(best_amount - subtotal) <= Decimal("0.03")
+        weak_total = best_score < 55.0 or not best_is_explicit_total
+        if close_to_subtotal or weak_total:
+            return inferred_total, max(best_conf, 55.0)
+
+    if best_amount is None:
         return None, 0.0
 
-    amount, conf, _ = max(candidates, key=lambda item: item[2])
-    return amount, conf
+    if best_amount < Decimal("1.00") and not best_is_explicit_total:
+        return None, 0.0
+    if best_conf < 8.0 and not best_is_explicit_total and best_amount < Decimal("5.00"):
+        return None, 0.0
+
+    return best_amount, best_conf
 
 
 def _find_keyword_amount(lines: list[str], keywords: list[str]) -> Decimal | None:
@@ -531,8 +648,9 @@ def _extract_amount_from_line(
     filtered = candidates
     if prefer_non_percent:
         non_percent = [c for c in filtered if not c["is_percent"]]
-        if non_percent:
-            filtered = non_percent
+        if not non_percent:
+            return None
+        filtered = non_percent
 
     currency_candidates = [c for c in filtered if c["has_currency"]]
     if currency_candidates:
@@ -583,17 +701,36 @@ def _compute_overall_confidence(
     has_total: bool,
     has_date: bool,
     has_tax: bool,
-) -> float:
-    weighted = (pass_conf * 0.32) + (merchant_conf * 0.14) + (date_conf * 0.2) + (total_conf * 0.22) + (tax_conf * 0.12)
+) -> tuple[float, dict]:
+    weighted = {
+        "pass": pass_conf * 0.32,
+        "merchant": merchant_conf * 0.14,
+        "date": date_conf * 0.2,
+        "total": total_conf * 0.22,
+        "tax": tax_conf * 0.12,
+    }
 
-    if not has_total:
-        weighted -= 20
-    if not has_date:
-        weighted -= 10
-    if not has_tax:
-        weighted -= 5
+    penalties = {
+        "missing_total": 20.0 if not has_total else 0.0,
+        "missing_date": 10.0 if not has_date else 0.0,
+        "missing_tax": 5.0 if not has_tax else 0.0,
+    }
+    penalty_total = penalties["missing_total"] + penalties["missing_date"] + penalties["missing_tax"]
 
-    return max(0.0, min(100.0, round(weighted, 2)))
+    raw_score = sum(weighted.values()) - penalty_total
+    score = max(0.0, min(100.0, round(raw_score, 2)))
+
+    breakdown = {
+        "pass_conf": round(pass_conf, 2),
+        "merchant_conf": round(merchant_conf, 2),
+        "date_conf": round(date_conf, 2),
+        "total_conf": round(total_conf, 2),
+        "tax_conf": round(tax_conf, 2),
+        "weighted": {k: round(v, 2) for k, v in weighted.items()},
+        "penalties": {**penalties, "total": round(penalty_total, 2)},
+        "final": score,
+    }
+    return score, breakdown
 
 
 def _line_confidence(line: str, line_confidences: dict[str, float]) -> float:
@@ -708,10 +845,6 @@ def _orient_image(image: Image.Image) -> Image.Image:
     return image
 
 
-
-
-
-
 def _order_quad_points(pts: "np.ndarray") -> "np.ndarray":
     # pts shape (4, 2)
     rect = np.zeros((4, 2), dtype="float32")
@@ -817,7 +950,7 @@ def _auto_crop_receipt(image: Image.Image) -> Image.Image:
         bbox = bright_mask.getbbox()
 
         # 2) Fallback to edge bbox if the bright bbox looks wrong.
-        if not bbox or (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) < (work.width * work.height * 0.18):
+        if not bbox or (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) < (work.width * work.height * 0.08):
             edges = work.filter(ImageFilter.FIND_EDGES)
             edges = ImageOps.autocontrast(edges)
             edges = edges.point(lambda px: 255 if px > 48 else 0)
@@ -828,7 +961,7 @@ def _auto_crop_receipt(image: Image.Image) -> Image.Image:
 
         x0, y0, x1, y1 = bbox
         area = (x1 - x0) * (y1 - y0)
-        if area < (work.width * work.height * 0.18):
+        if area < (work.width * work.height * 0.08):
             return image
 
         pad = int(max(work.size) * 0.02)
@@ -957,7 +1090,6 @@ def _build_variants(image: Image.Image, fast_mode: bool) -> list[Image.Image]:
 
     denoised = equalized.filter(ImageFilter.MedianFilter(size=3))
 
-    # High-pass style enhancement to make faint thermal text pop.
     blurred = denoised.filter(ImageFilter.GaussianBlur(radius=1.2))
     highpass = ImageChops.subtract(denoised, blurred)
     highpass = ImageOps.autocontrast(highpass)
@@ -966,10 +1098,39 @@ def _build_variants(image: Image.Image, fast_mode: bool) -> list[Image.Image]:
 
     thr = _otsu_threshold(denoised)
     threshold_otsu = denoised.point(lambda px: 0 if px < thr else 255, mode="1")
-
-    # Keep a couple fixed thresholds as fallbacks.
     threshold_145 = denoised.point(lambda px: 0 if px < 145 else 255, mode="1")
     threshold_170 = denoised.point(lambda px: 0 if px < 170 else 255, mode="1")
 
-    variants = [denoised, sharpened, highpass, threshold_otsu, threshold_145, threshold_170]
-    return variants[:3] if fast_mode else variants
+    # Keep less-processed variants first; some receipts degrade with heavy equalization.
+    variants = [upscaled, autocontrast, denoised, sharpened, highpass, threshold_otsu, threshold_145, threshold_170]
+
+    if cv2 is not None and np is not None:
+        try:
+            arr = np.array(denoised)
+            if arr.ndim == 3:
+                arr = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+
+            adapt_mean = cv2.adaptiveThreshold(arr, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 31, 12)
+            adapt_gauss = cv2.adaptiveThreshold(arr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 8)
+            kernel = np.ones((2, 2), dtype=np.uint8)
+            morph = cv2.morphologyEx(adapt_gauss, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+            variants.extend([
+                Image.fromarray(adapt_mean).convert("L"),
+                Image.fromarray(adapt_gauss).convert("L"),
+                Image.fromarray(morph).convert("L"),
+            ])
+        except Exception:
+            pass
+
+    deduped: list[Image.Image] = []
+    seen: set[tuple[int, int, int]] = set()
+    for variant in variants:
+        probe = variant.resize((64, 64)).convert("L")
+        signature = (probe.size[0], probe.size[1], sum(probe.tobytes()) % 1000003)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(variant)
+
+    return deduped[:4] if fast_mode else deduped
