@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -340,6 +340,30 @@ def get_upload_job(job_id: int, db: Session = Depends(get_db), user: User = Depe
     return _serialize_upload_job(job)
 
 
+def _apply_receipt_date_filters(stmt, date_from: date | None, date_to: date | None):
+    if date_from is None and date_to is None:
+        return stmt
+
+    created_date = func.date(Receipt.created_at)
+
+    if date_from is not None:
+        stmt = stmt.where(
+            or_(
+                Receipt.purchase_date >= date_from,
+                and_(Receipt.purchase_date.is_(None), created_date >= date_from),
+            )
+        )
+    if date_to is not None:
+        stmt = stmt.where(
+            or_(
+                Receipt.purchase_date <= date_to,
+                and_(Receipt.purchase_date.is_(None), created_date <= date_to),
+            )
+        )
+
+    return stmt
+
+
 @app.get("/receipts", response_model=list[ReceiptOut])
 def list_receipts(
     date_from: date | None = Query(default=None),
@@ -351,10 +375,7 @@ def list_receipts(
 ):
     stmt = select(Receipt)
 
-    if date_from is not None:
-        stmt = stmt.where(Receipt.purchase_date >= date_from)
-    if date_to is not None:
-        stmt = stmt.where(Receipt.purchase_date <= date_to)
+    stmt = _apply_receipt_date_filters(stmt, date_from, date_to)
 
     merchant_filter = (merchant or "").strip()
     if merchant_filter:
@@ -588,10 +609,7 @@ def export_receipts_csv(
 ):
     stmt = select(Receipt)
 
-    if date_from is not None:
-        stmt = stmt.where(Receipt.purchase_date >= date_from)
-    if date_to is not None:
-        stmt = stmt.where(Receipt.purchase_date <= date_to)
+    stmt = _apply_receipt_date_filters(stmt, date_from, date_to)
     if merchant:
         stmt = stmt.where(func.lower(Receipt.merchant) == merchant.strip().lower())
     if reviewed is not None:
