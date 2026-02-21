@@ -18,6 +18,17 @@ class ReceiptOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UploadJobOut(BaseModel):
+    id: int
+    status: str
+    original_filename: str
+    content_type: str | None
+    receipt_id: int | None = None
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class ReceiptUpdate(BaseModel):
     merchant: str | None = None
     purchase_date: date | None = None

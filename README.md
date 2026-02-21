@@ -71,6 +71,7 @@ If no admin exists and `DEFAULT_ADMIN_PASSWORD` is weak (<12 chars or common def
 ## Core API endpoints
 - `GET /health`
 - `POST /receipts/upload` (admin only)
+- `GET /upload-jobs/{id}` (admin only; poll async OCR status)
 - `GET /receipts` (supports `date_from`, `date_to`, `merchant`, `reviewed`)
 - `PATCH /receipts/{id}` (admin only)
 - `PATCH /receipts/{id}/review` (admin only)
@@ -174,3 +175,5 @@ Content-Type: multipart/form-data
 Notes:
 - Upload tokens can only be used for `POST /receipts/upload`.
 - Tokens are shown only once when created; store them somewhere safe.
+- `POST /receipts/upload` now returns `202 Accepted` with a job payload (`id`, `status`).
+- Poll `GET /upload-jobs/{id}` until `status` is `completed` or `failed`.

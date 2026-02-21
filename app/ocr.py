@@ -27,10 +27,14 @@ AMOUNT_TOKEN_PATTERN = re.compile(r"(\$?\s*[0-9]+(?:\.[0-9]{2}))(\s*%)?")
 COMMON_DIGIT_FIXES = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "B": "8"})
 MAX_PDF_OCR_PAGES = 4
 OCR_AUTO_CROP = os.getenv("OCR_AUTO_CROP", "true").strip().lower() == "true"
-OCR_DESKEW = os.getenv("OCR_DESKEW", "true").strip().lower() == "true"
-OCR_DESKEW_DEGREES = float(os.getenv("OCR_DESKEW_DEGREES", "5"))
-OCR_DESKEW_STEP = float(os.getenv("OCR_DESKEW_STEP", "0.5"))
+OCR_DESKEW = os.getenv("OCR_DESKEW", "false").strip().lower() == "true"
+OCR_DESKEW_DEGREES = float(os.getenv("OCR_DESKEW_DEGREES", "3"))
+OCR_DESKEW_STEP = float(os.getenv("OCR_DESKEW_STEP", "1.0"))
 OCR_PERSPECTIVE = os.getenv("OCR_PERSPECTIVE", "true").strip().lower() == "true"
+OCR_FAST_MODE = os.getenv("OCR_FAST_MODE", "true").strip().lower() == "true"
+OCR_MAX_IMAGE_SIDE = int(os.getenv("OCR_MAX_IMAGE_SIDE", "1600"))
+OCR_TESS_TIMEOUT_SEC = int(os.getenv("OCR_TESS_TIMEOUT_SEC", "10"))
+OCR_OSD_TIMEOUT_SEC = int(os.getenv("OCR_OSD_TIMEOUT_SEC", "3"))
 
 
 
@@ -52,6 +56,9 @@ def _ocr_quality_score(text: str, avg_conf: float) -> float:
 def run_ocr(image_bytes: bytes) -> dict:
     base_image = Image.open(io.BytesIO(image_bytes))
     base_image = ImageOps.exif_transpose(base_image).convert("L")
+    if max(base_image.size) > OCR_MAX_IMAGE_SIDE:
+        scale = OCR_MAX_IMAGE_SIDE / max(base_image.size)
+        base_image = base_image.resize((int(base_image.width * scale), int(base_image.height * scale)))
 
     candidates: list[Image.Image] = [base_image]
     if OCR_AUTO_CROP:
@@ -60,11 +67,15 @@ def run_ocr(image_bytes: bytes) -> dict:
         if cropped.size != base_image.size:
             candidates.append(cropped)
 
-    configs = ["--oem 3 --psm 6", "--oem 3 --psm 4", "--oem 3 --psm 11"]
-    number_configs = [
-        "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.$%",
-        "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.$%",
-    ]
+    if OCR_FAST_MODE:
+        configs = ["--oem 3 --psm 6", "--oem 3 --psm 4"]
+        number_configs = ["--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.$%"]
+    else:
+        configs = ["--oem 3 --psm 6", "--oem 3 --psm 4", "--oem 3 --psm 11"]
+        number_configs = [
+            "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.$%",
+            "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.$%",
+        ]
 
     best_overall: dict | None = None
     best_overall_score = -1.0
@@ -618,7 +629,15 @@ def _build_line_confidence_map(lines: list[dict]) -> dict[str, float]:
 
 
 def _ocr_with_confidence(image: Image.Image, config: str) -> dict:
-    data = pytesseract.image_to_data(image, config=config, output_type=Output.DICT)
+    try:
+        data = pytesseract.image_to_data(
+            image,
+            config=config,
+            output_type=Output.DICT,
+            timeout=max(1, OCR_TESS_TIMEOUT_SEC),
+        )
+    except RuntimeError:
+        return {"text": "", "avg_confidence": 0.0, "lines": []}
 
     confidences: list[float] = []
     grouped_lines: dict[tuple[int, int, int], list[tuple[str, float]]] = {}
@@ -676,7 +695,7 @@ def _parse_conf(value: str | int | float) -> float:
 
 def _orient_image(image: Image.Image) -> Image.Image:
     try:
-        osd = pytesseract.image_to_osd(image)
+        osd = pytesseract.image_to_osd(image, timeout=max(1, OCR_OSD_TIMEOUT_SEC))
         match = re.search(r"Rotate: (\d+)", osd)
         if match:
             angle = int(match.group(1))
@@ -950,4 +969,5 @@ def _build_variants(image: Image.Image) -> list[Image.Image]:
     threshold_145 = denoised.point(lambda px: 0 if px < 145 else 255, mode="1")
     threshold_170 = denoised.point(lambda px: 0 if px < 170 else 255, mode="1")
 
-    return [denoised, sharpened, highpass, threshold_otsu, threshold_145, threshold_170]
+    variants = [denoised, sharpened, highpass, threshold_otsu, threshold_145, threshold_170]
+    return variants[:3] if OCR_FAST_MODE else variants

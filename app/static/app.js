@@ -361,6 +361,10 @@ function updateStatusRow(statusRow, message, className = "") {
   if (uploadStatus) uploadStatus.textContent = message;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function uploadOne(file, onUploadFinished) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
@@ -402,6 +406,35 @@ function uploadOne(file, onUploadFinished) {
   });
 }
 
+async function pollUploadJob(jobId, statusRow) {
+  const startedAt = Date.now();
+  const timeoutMs = 15 * 60 * 1000;
+
+  while (true) {
+    const response = await apiFetch(`/upload-jobs/${jobId}`);
+    if (!response.ok) {
+      const details = await response.json().catch(() => ({}));
+      throw new Error(details.detail || `Job status failed (${response.status})`);
+    }
+
+    const job = await response.json();
+    if (job.status === "queued") {
+      updateStatusRow(statusRow, "Upload finished. OCR queued...", "");
+    } else if (job.status === "processing") {
+      updateStatusRow(statusRow, "Upload finished. OCR running...", "");
+    } else if (job.status === "completed") {
+      return job;
+    } else if (job.status === "failed") {
+      throw new Error(job.error_message || "OCR failed");
+    }
+
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("OCR polling timed out");
+    }
+    await sleep(1200);
+  }
+}
+
 function appendStatus(message, className = "") {
   const item = document.createElement("li");
   if (className) item.className = className;
@@ -428,7 +461,7 @@ uploadBtn.addEventListener("click", async () => {
   selectedFiles = [];
   renderSelectedFiles();
 
-  let success = 0;
+  let uploaded = 0;
   let ocrComplete = 0;
 
   for (const file of queue) {
@@ -436,10 +469,17 @@ uploadBtn.addEventListener("click", async () => {
     updateStatusRow(statusRow, "Uploading file...", "");
 
     try {
-      const result = await uploadOne(file, () => updateStatusRow(statusRow, "Upload finished. OCR running...", ""));
+      const accepted = await uploadOne(file, () => updateStatusRow(statusRow, "Upload transfer complete. Waiting for OCR queue...", ""));
+      uploaded += 1;
+
+      const jobId = Number(accepted.id || 0);
+      if (!jobId) {
+        throw new Error("Upload accepted but no job id was returned");
+      }
+
+      await pollUploadJob(jobId, statusRow);
       ocrComplete += 1;
-      success += 1;
-      updateStatusRow(statusRow, result.needs_review ? "OCR complete (needs review)" : "OCR complete", result.needs_review ? "err" : "ok");
+      updateStatusRow(statusRow, "OCR complete", "ok");
     } catch (error) {
       updateStatusRow(statusRow, `Failed (${error.message})`, "err");
     }
@@ -448,7 +488,7 @@ uploadBtn.addEventListener("click", async () => {
   uploadBtn.disabled = false;
   uploadBtn.textContent = "Upload selected files";
   uploadList?.setAttribute("aria-busy", "false");
-  appendStatus(`Done: ${success}/${queue.length} uploaded, OCR completed for ${ocrComplete}.`);
+  appendStatus(`Done: ${uploaded}/${queue.length} uploaded, OCR completed for ${ocrComplete}.`);
   await loadMerchantFilterOptions();
   await loadReceipts();
 });

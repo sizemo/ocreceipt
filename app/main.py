@@ -3,6 +3,7 @@ import io
 import os
 import re
 import shutil
+import secrets
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -22,11 +23,12 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .auth import create_session, delete_session, get_user_by_session_token, hash_api_token, hash_password, verify_password
 from .database import Base, engine, get_db
-from .models import ApiToken, InstanceSetting, Merchant, Receipt, ReceiptImage, User, UserSession
+from .models import ApiToken, InstanceSetting, Merchant, Receipt, ReceiptImage, UploadJob, User, UserSession
 from .ocr import extract_receipt_fields, get_pdf_page_count, render_pdf_preview_image, run_ocr, run_ocr_pdf
 from .schemas import (
     InstanceResetRequest,
     LoginRequest,
+    UploadJobOut,
     ReceiptOut,
     ReceiptReviewUpdate,
     ReceiptUpdate,
@@ -67,6 +69,11 @@ if SESSION_COOKIE_SAMESITE == "none" and not SESSION_COOKIE_SECURE:
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 _LOGIN_BLOCKED_UNTIL: dict[str, float] = {}
 _LOGIN_LOCK = threading.Lock()
+_UPLOAD_QUEUE: list[int] = []
+_UPLOAD_QUEUE_LOCK = threading.Lock()
+_UPLOAD_QUEUE_COND = threading.Condition(_UPLOAD_QUEUE_LOCK)
+_UPLOAD_WORKER_STOP = threading.Event()
+_UPLOAD_WORKER_THREAD: threading.Thread | None = None
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -230,6 +237,30 @@ def auth_me(user: User = Depends(get_current_user), db: Session = Depends(get_db
     }
 
 
+@app.on_event("startup")
+def _start_upload_worker() -> None:
+    global _UPLOAD_WORKER_THREAD
+    if _UPLOAD_WORKER_THREAD and _UPLOAD_WORKER_THREAD.is_alive():
+        return
+
+    _UPLOAD_WORKER_STOP.clear()
+    _UPLOAD_WORKER_THREAD = threading.Thread(target=_upload_worker_loop, name="upload-worker", daemon=True)
+    _UPLOAD_WORKER_THREAD.start()
+    _requeue_incomplete_upload_jobs()
+
+
+@app.on_event("shutdown")
+def _stop_upload_worker() -> None:
+    _UPLOAD_WORKER_STOP.set()
+    with _UPLOAD_QUEUE_COND:
+        _UPLOAD_QUEUE_COND.notify_all()
+
+    global _UPLOAD_WORKER_THREAD
+    if _UPLOAD_WORKER_THREAD and _UPLOAD_WORKER_THREAD.is_alive():
+        _UPLOAD_WORKER_THREAD.join(timeout=2)
+    _UPLOAD_WORKER_THREAD = None
+
+
 
 
 @app.patch("/users/me/theme")
@@ -253,8 +284,8 @@ def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_
     )
 
 
-@app.post("/receipts/upload", response_model=ReceiptOut)
-async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(require_upload_auth)):
+@app.post("/receipts/upload", response_model=UploadJobOut, status_code=202)
+async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_upload_auth)):
     content_type = (file.content_type or "").lower()
     original_name = file.filename or "receipt"
     is_pdf = content_type == "application/pdf" or Path(original_name).suffix.lower() == ".pdf"
@@ -267,55 +298,46 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
     if not uploaded_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    try:
-        if is_pdf:
-            ocr_result = run_ocr_pdf(uploaded_bytes)
-            saved_bytes = uploaded_bytes
-            saved_content_type = "application/pdf"
-            saved_name = f"{Path(original_name).stem}.pdf"
-        else:
-            normalized_bytes, normalized_content_type, normalized_name = _normalize_upload_image(uploaded_bytes, original_name, content_type)
-            ocr_result = run_ocr(normalized_bytes)
-            saved_bytes = normalized_bytes
-            saved_content_type = normalized_content_type
-            saved_name = normalized_name
+    if is_pdf:
+        saved_bytes = uploaded_bytes
+        saved_content_type = "application/pdf"
+        saved_name = f"{Path(original_name).stem}.pdf"
+    else:
+        saved_bytes, saved_content_type, saved_name = _normalize_upload_image(uploaded_bytes, original_name, content_type)
 
-        extracted = extract_receipt_fields(ocr_result)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"OCR failed: {exc}") from exc
-
-    merchant_name = _normalize_merchant(extracted["merchant"])
-
-    receipt = Receipt(
-        merchant=merchant_name,
-        purchase_date=extracted["purchase_date"],
-        total_amount=_as_decimal(extracted["total_amount"]),
-        sales_tax_amount=_as_decimal(extracted["sales_tax_amount"]),
-        extraction_confidence=_as_decimal(extracted.get("extraction_confidence")),
-        needs_review=bool(extracted.get("needs_review", False)),
-        raw_ocr_text=extracted["raw_ocr_text"],
+    queue_filename = _save_upload_queue_file(saved_name, saved_bytes)
+    job = UploadJob(
+        status="queued",
+        original_filename=original_name,
+        stored_filename=queue_filename,
+        content_type=saved_content_type,
+        created_by_user_id=user.id,
+        error_message=None,
     )
 
-    saved_filename: str | None = None
     try:
-        db.add(receipt)
-        db.flush()
-
-        saved_filename = _save_receipt_image(receipt.id, saved_name, saved_bytes)
-        db.add(ReceiptImage(receipt_id=receipt.id, stored_filename=saved_filename, content_type=saved_content_type))
-
-        if merchant_name:
-            _upsert_merchant(db, merchant_name)
-
+        db.add(job)
         db.commit()
-        db.refresh(receipt)
+        db.refresh(job)
     except Exception as exc:
         db.rollback()
-        if saved_filename:
-            _delete_receipt_image(saved_filename)
-        raise HTTPException(status_code=500, detail=f"Failed to save receipt: {exc}") from exc
+        _delete_receipt_image(queue_filename)
+        raise HTTPException(status_code=500, detail=f"Failed to create upload job: {exc}") from exc
 
-    return _serialize_receipt(receipt, has_image=True)
+    _enqueue_upload_job(job.id)
+    return _serialize_upload_job(job)
+
+
+@app.get("/upload-jobs/{job_id}", response_model=UploadJobOut)
+def get_upload_job(job_id: int, db: Session = Depends(get_db), user: User = Depends(require_upload_auth)):
+    stmt = select(UploadJob).where(UploadJob.id == job_id)
+    if user.role != "admin":
+        stmt = stmt.where(UploadJob.created_by_user_id == user.id)
+
+    job = db.scalar(stmt)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Upload job not found")
+    return _serialize_upload_job(job)
 
 
 @app.get("/receipts", response_model=list[ReceiptOut])
@@ -887,6 +909,132 @@ def _serialize_receipt(receipt: Receipt, has_image: bool) -> dict:
         "created_at": receipt.created_at,
         "image_url": image_url,
     }
+
+
+def _serialize_upload_job(job: UploadJob) -> dict:
+    return {
+        "id": job.id,
+        "status": job.status,
+        "original_filename": job.original_filename,
+        "content_type": job.content_type,
+        "receipt_id": job.receipt_id,
+        "error_message": job.error_message,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def _save_upload_queue_file(original_name: str | None, file_bytes: bytes) -> str:
+    ext = Path(original_name or "").suffix.lower()
+    if not ext or len(ext) > 8:
+        ext = ".bin"
+    filename = f"upload_{int(time.time() * 1000)}_{secrets.token_hex(6)}{ext}"
+    (UPLOADS_DIR / filename).write_bytes(file_bytes)
+    return filename
+
+
+def _enqueue_upload_job(job_id: int) -> None:
+    with _UPLOAD_QUEUE_COND:
+        _UPLOAD_QUEUE.append(job_id)
+        _UPLOAD_QUEUE_COND.notify()
+
+
+def _requeue_incomplete_upload_jobs() -> None:
+    with Session(bind=engine) as db:
+        pending = db.scalars(select(UploadJob.id).where(UploadJob.status.in_(["queued", "processing"]))).all()
+    if not pending:
+        return
+    with _UPLOAD_QUEUE_COND:
+        for job_id in pending:
+            _UPLOAD_QUEUE.append(job_id)
+        _UPLOAD_QUEUE_COND.notify_all()
+
+
+def _upload_worker_loop() -> None:
+    while not _UPLOAD_WORKER_STOP.is_set():
+        job_id: int | None = None
+        with _UPLOAD_QUEUE_COND:
+            while not _UPLOAD_QUEUE and not _UPLOAD_WORKER_STOP.is_set():
+                _UPLOAD_QUEUE_COND.wait(timeout=0.5)
+            if _UPLOAD_WORKER_STOP.is_set():
+                return
+            if _UPLOAD_QUEUE:
+                job_id = _UPLOAD_QUEUE.pop(0)
+
+        if job_id is not None:
+            _process_upload_job(job_id)
+
+
+def _process_upload_job(job_id: int) -> None:
+    with Session(bind=engine) as db:
+        job = db.scalar(select(UploadJob).where(UploadJob.id == job_id))
+        if job is None:
+            return
+        if job.status not in {"queued", "processing"}:
+            return
+
+        job.status = "processing"
+        job.started_at = datetime.now(timezone.utc)
+        job.error_message = None
+        db.add(job)
+        db.commit()
+
+        queue_filename = job.stored_filename
+        queue_path = UPLOADS_DIR / queue_filename
+        if not queue_path.exists():
+            _mark_upload_job_failed(job_id, "Uploaded file is missing")
+            return
+
+        try:
+            payload = queue_path.read_bytes()
+            is_pdf = (job.content_type or "").lower() == "application/pdf" or queue_path.suffix.lower() == ".pdf"
+            ocr_result = run_ocr_pdf(payload) if is_pdf else run_ocr(payload)
+            extracted = extract_receipt_fields(ocr_result)
+
+            merchant_name = _normalize_merchant(extracted["merchant"])
+            receipt = Receipt(
+                merchant=merchant_name,
+                purchase_date=extracted["purchase_date"],
+                total_amount=_as_decimal(extracted["total_amount"]),
+                sales_tax_amount=_as_decimal(extracted["sales_tax_amount"]),
+                extraction_confidence=_as_decimal(extracted.get("extraction_confidence")),
+                needs_review=bool(extracted.get("needs_review", False)),
+                raw_ocr_text=extracted["raw_ocr_text"],
+            )
+
+            db.add(receipt)
+            db.flush()
+
+            final_filename = _save_receipt_image(receipt.id, job.stored_filename, payload)
+            db.add(ReceiptImage(receipt_id=receipt.id, stored_filename=final_filename, content_type=job.content_type))
+
+            if merchant_name:
+                _upsert_merchant(db, merchant_name)
+
+            job.receipt_id = receipt.id
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            job.error_message = None
+            db.add(job)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            _mark_upload_job_failed(job_id, str(exc))
+            return
+        finally:
+            _delete_receipt_image(queue_filename)
+
+
+def _mark_upload_job_failed(job_id: int, error: str) -> None:
+    with Session(bind=engine) as db:
+        job = db.scalar(select(UploadJob).where(UploadJob.id == job_id))
+        if job is None:
+            return
+        job.status = "failed"
+        job.completed_at = datetime.now(timezone.utc)
+        job.error_message = (error or "OCR failed")[:2000]
+        db.add(job)
+        db.commit()
 
 
 def _ensure_schema() -> None:
