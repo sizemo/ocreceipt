@@ -1,5 +1,6 @@
 const authSection = document.getElementById("auth-section");
 const appShell = document.getElementById("app-shell");
+const bootSkeleton = document.getElementById("boot-skeleton");
 const loginForm = document.getElementById("login-form");
 const loginUsernameInput = document.getElementById("login-username");
 const loginPasswordInput = document.getElementById("login-password");
@@ -10,6 +11,7 @@ const menuToggle = document.getElementById("menu-toggle");
 const userMenu = document.getElementById("user-menu");
 const adminLink = document.getElementById("admin-link");
 const themeSelect = document.getElementById("theme-select");
+const debugModeToggle = document.getElementById("debug-mode-toggle");
 const logoutBtn = document.getElementById("logout-btn");
 
 const fileInput = document.getElementById("file-input");
@@ -17,6 +19,9 @@ const dropzone = document.getElementById("dropzone");
 const uploadBtn = document.getElementById("upload-btn");
 const uploadList = document.getElementById("upload-list");
 const uploadStatus = document.getElementById("upload-status");
+const forceReprocessInput = document.getElementById("force-reprocess");
+const forceReprocessToggle = document.querySelector(".upload-toggle");
+const debugModeBadge = document.getElementById("debug-mode-badge");
 const receiptsBody = document.getElementById("receipts-body");
 const receiptsTable = receiptsBody?.closest("table");
 const refreshBtn = document.getElementById("refresh-btn");
@@ -55,6 +60,7 @@ let receiptRows = [];
 let merchantSearchAbort = null;
 let currentUser = null;
 let defaultCurrency = "USD";
+let debugModeEnabled = false;
 
 let sortState = { key: "created_at", dir: "desc" };
 let currentEditRow = null;
@@ -91,6 +97,48 @@ function setVisualAccessibility(enabled) {
   document.documentElement.setAttribute("data-visual-accessibility", enabled ? "on" : "off");
 }
 
+function getDebugModeStorageKey() {
+  if (currentUser?.username) return `debug-mode:user:${currentUser.username}`;
+  return "debug-mode:last";
+}
+
+function getSavedDebugModeValue() {
+  const userScoped = currentUser?.username ? localStorage.getItem(getDebugModeStorageKey()) : null;
+  const raw = userScoped ?? localStorage.getItem("debug-mode:last");
+  return raw === "true";
+}
+
+function applyDebugModeVisibility() {
+  if (forceReprocessToggle) {
+    forceReprocessToggle.classList.toggle("upload-toggle-hidden", !debugModeEnabled);
+    forceReprocessToggle.hidden = false;
+  }
+  if (debugModeBadge) {
+    debugModeBadge.hidden = !debugModeEnabled;
+  }
+  if (!debugModeEnabled && forceReprocessInput) {
+    forceReprocessInput.checked = false;
+  }
+  if (debugModeToggle) {
+    debugModeToggle.checked = debugModeEnabled;
+  }
+}
+
+function setDebugMode(enabled, options = {}) {
+  const { persist = true } = options;
+  debugModeEnabled = Boolean(enabled);
+  applyDebugModeVisibility();
+  if (!persist) return;
+
+  const value = debugModeEnabled ? "true" : "false";
+  localStorage.setItem("debug-mode:last", value);
+  if (currentUser?.username) {
+    localStorage.setItem(getDebugModeStorageKey(), value);
+  }
+}
+
+setDebugMode(getSavedDebugModeValue(), { persist: false });
+
 
 
 function bindPasswordToggles(root = document) {
@@ -125,6 +173,15 @@ if (themeSelect) {
     setTheme(themeSelect.value);
     updateMyThemePreference(themeSelect.value);
     closeMenu();
+  });
+}
+
+if (debugModeToggle) {
+  debugModeToggle.addEventListener("input", () => {
+    setDebugMode(debugModeToggle.checked);
+  });
+  debugModeToggle.addEventListener("change", () => {
+    setDebugMode(debugModeToggle.checked);
   });
 }
 
@@ -177,6 +234,8 @@ async function apiFetch(url, options = {}) {
 
 function showAuthOnly() {
   currentUser = null;
+  setDebugMode(getSavedDebugModeValue(), { persist: false });
+  if (bootSkeleton) bootSkeleton.hidden = true;
   authSection.hidden = false;
   appShell.hidden = true;
   authError.textContent = "";
@@ -184,6 +243,7 @@ function showAuthOnly() {
 }
 
 function showAppShell() {
+  if (bootSkeleton) bootSkeleton.hidden = true;
   authSection.hidden = true;
   appShell.hidden = false;
 }
@@ -211,9 +271,9 @@ async function refreshSession() {
     localStorage.setItem(`theme:user:${data.username}`, normalizeTheme(data.theme || "midnight"));
     defaultCurrency = data.default_currency || "USD";
     setVisualAccessibility(data.visual_accessibility_enabled !== false);
+    setDebugMode(getSavedDebugModeValue(), { persist: false });
     setSessionLabel();
     setAdminVisibility();
-    showAppShell();
     return true;
   } catch {
     showAuthOnly();
@@ -372,6 +432,7 @@ function uploadOne(file, onUploadFinished) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append("file", file);
+    if (forceReprocessInput?.checked) formData.append("force_reprocess", "true");
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/receipts/upload");
@@ -1176,11 +1237,15 @@ refreshBtn.addEventListener("click", loadReceipts);
 async function initializeAuthenticatedApp() {
   const ok = await refreshSession();
   if (!ok) return;
-  renderSelectedFiles();
-  setDefaultYearFilters();
-  updateExportCsvLink();
-  await loadMerchantFilterOptions();
-  await loadReceipts();
+  try {
+    renderSelectedFiles();
+    setDefaultYearFilters();
+    updateExportCsvLink();
+    await loadMerchantFilterOptions();
+    await loadReceipts();
+  } finally {
+    showAppShell();
+  }
 }
 
 initializeAuthenticatedApp();

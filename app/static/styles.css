@@ -172,6 +172,68 @@ small {
   padding: 1.25rem;
 }
 
+.boot-skeleton {
+  width: min(980px, 95vw);
+  margin: 0 auto;
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.skeleton-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.5rem;
+  background: color-mix(in srgb, var(--surface-strong) 86%, transparent);
+}
+
+.skeleton-line {
+  height: 0.82rem;
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--surface-strong) 78%, transparent) 0%,
+    color-mix(in srgb, var(--surface-elev) 88%, transparent) 48%,
+    color-mix(in srgb, var(--surface-strong) 78%, transparent) 100%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-shift 1.2s ease-in-out infinite;
+}
+
+.skeleton-title {
+  width: 30%;
+  height: 1.15rem;
+}
+
+.skeleton-subtitle {
+  width: 56%;
+}
+
+.skeleton-body {
+  width: 100%;
+}
+
+.skeleton-body.short {
+  width: 70%;
+}
+
+.skeleton-button {
+  width: 24%;
+  height: 2.2rem;
+  border-radius: 12px;
+}
+
+@keyframes skeleton-shift {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -20% 0;
+  }
+}
+
 .auth-form,
 .admin-form,
 .edit-form {
@@ -258,6 +320,59 @@ small {
   padding: 0.42rem 0.56rem 0.2rem;
 }
 
+.menu-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.42rem 0.56rem 0.2rem;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.menu-switch input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.menu-switch-slider {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-strong) 88%, transparent);
+  border: 1px solid var(--border);
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.menu-switch-slider::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 140ms ease, background-color 140ms ease;
+}
+
+.menu-switch input[type="checkbox"]:checked + .menu-switch-slider {
+  background: color-mix(in srgb, var(--accent) 33%, var(--surface-strong));
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+}
+
+.menu-switch input[type="checkbox"]:checked + .menu-switch-slider::after {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+.menu-switch input[type="checkbox"]:focus-visible + .menu-switch-slider {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
 .menu-theme-select {
   width: 100%;
 }
@@ -285,6 +400,20 @@ small {
   display: none;
 }
 
+.file-picker-meta {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding-top: 0.2rem;
+}
+
+.file-picker-meta .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .actions {
   margin-top: 0.8rem;
   display: flex;
@@ -294,7 +423,37 @@ small {
 
 .upload-actions {
   width: 100%;
+  display: flex;
   justify-content: center;
+  align-items: center;
+  min-height: 44px;
+}
+
+.upload-actions-center {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.upload-actions #upload-btn {
+  margin: 0;
+}
+
+.debug-badge {
+  position: absolute;
+  right: calc(100% + 0.55rem);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.16rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-strong));
+  color: color-mix(in srgb, var(--accent) 74%, var(--text));
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 button,
@@ -856,6 +1015,19 @@ tr:hover td {
 }
 
 @media (max-width: 760px) {
+  .upload-actions {
+    justify-content: center;
+  }
+
+  .upload-actions .upload-toggle {
+    position: static;
+    transform: none;
+    width: 100%;
+    justify-content: center;
+    margin-top: 0.35rem;
+    order: 2;
+  }
+
   .container {
     margin: 1rem auto 1.75rem;
     gap: 1rem;
@@ -1009,4 +1181,28 @@ tr:hover td {
 
 .toggle-setting input[type="checkbox"] {
   accent-color: var(--accent);
+}
+
+
+.upload-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1;
+  position: absolute;
+  left: calc(100% + 0.6rem);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
+.upload-toggle-hidden {
+  display: none !important;
+}
+
+.upload-toggle input[type="checkbox"] {
+  width: 0.72rem;
+  height: 0.72rem;
 }

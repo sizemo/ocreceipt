@@ -9,7 +9,20 @@
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <main id="main-content" class="container" tabindex="-1">
-      <section id="auth-section" class="card auth-card">
+      <section id="boot-skeleton" class="card boot-skeleton" aria-hidden="true">
+        <div class="skeleton-line skeleton-title"></div>
+        <div class="skeleton-line skeleton-subtitle"></div>
+        <div class="skeleton-card">
+          <div class="skeleton-line skeleton-body"></div>
+          <div class="skeleton-line skeleton-body short"></div>
+          <div class="skeleton-line skeleton-button"></div>
+        </div>
+        <div class="skeleton-card">
+          <div class="skeleton-line skeleton-body"></div>
+          <div class="skeleton-line skeleton-body"></div>
+        </div>
+      </section>
+      <section id="auth-section" class="card auth-card" hidden>
         <h1>OCReceipt</h1>
         <p>Sign in to access your instance.</p>
         <form id="login-form" class="auth-form" autocomplete="off" novalidate>
@@ -47,6 +60,11 @@
                     <option value="oled">OLED Black</option>
                   </select>
                 </label>
+                <label class="menu-switch" for="debug-mode-toggle">
+                  <span>Debug mode</span>
+                  <input id="debug-mode-toggle" type="checkbox" />
+                  <span class="menu-switch-slider" aria-hidden="true"></span>
+                </label>
                 <button id="logout-btn" type="button" class="menu-item danger-text">Logout</button>
               </div>
             </div>
@@ -57,12 +75,21 @@
           <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-controls="file-input" aria-label="Upload receipt files by drag and drop or by opening the file picker">
             <p><strong>Drag and drop receipt images or PDFs here</strong></p>
             <p>or</p>
-            <label class="button" for="file-input">Choose files</label>
+            <div class="file-picker-meta">
+              <label class="button" for="file-input">Choose files</label>
+              <small>Multiple files supported.</small>
+            </div>
             <input id="file-input" type="file" accept="image/*,.pdf,application/pdf" multiple />
-            <small>Multiple files supported.</small>
           </div>
           <div class="actions upload-actions">
-            <button id="upload-btn" type="button">Upload selected files</button>
+            <div class="upload-actions-center">
+              <button id="upload-btn" type="button">Upload selected files</button>
+              <span id="debug-mode-badge" class="debug-badge" hidden>Debug mode</span>
+              <label class="upload-toggle upload-toggle-hidden" for="force-reprocess">
+                <input id="force-reprocess" type="checkbox" />
+                Force reprocess (bypass dedupe)
+              </label>
+            </div>
           </div>
           <ul id="upload-list" class="upload-list" aria-live="polite" aria-atomic="false"></ul>
           <p id="upload-status" class="sr-only" role="status" aria-live="polite"></p>

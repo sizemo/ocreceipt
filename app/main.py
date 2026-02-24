@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, func, or_, select, text
@@ -291,7 +291,7 @@ def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_
 
 
 @app.post("/receipts/upload", response_model=UploadJobOut, status_code=202)
-async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_upload_auth)):
+async def upload_receipt(file: UploadFile = File(...), force_reprocess: bool = Form(False), db: Session = Depends(get_db), user: User = Depends(require_upload_auth)):
     content_type = (file.content_type or "").lower()
     original_name = file.filename or "receipt"
     is_pdf = content_type == "application/pdf" or Path(original_name).suffix.lower() == ".pdf"
@@ -314,19 +314,21 @@ async def upload_receipt(file: UploadFile = File(...), db: Session = Depends(get
     file_sha256 = hashlib.sha256(saved_bytes).hexdigest()
 
     # Guard against accidental duplicate submits for the same file.
-    dedupe_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(60, UPLOAD_DEDUPE_WINDOW_SECONDS))
-    existing_job = db.scalar(
-        select(UploadJob)
-        .where(
-            UploadJob.created_by_user_id == user.id,
-            UploadJob.file_sha256 == file_sha256,
-            UploadJob.created_at >= dedupe_cutoff,
-            UploadJob.status.in_(["queued", "processing", "completed"]),
+    # Admin can explicitly bypass dedupe for retuning/reprocessing.
+    if not force_reprocess:
+        dedupe_cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(60, UPLOAD_DEDUPE_WINDOW_SECONDS))
+        existing_job = db.scalar(
+            select(UploadJob)
+            .where(
+                UploadJob.created_by_user_id == user.id,
+                UploadJob.file_sha256 == file_sha256,
+                UploadJob.created_at >= dedupe_cutoff,
+                UploadJob.status.in_(["queued", "processing", "completed"]),
+            )
+            .order_by(UploadJob.id.desc())
         )
-        .order_by(UploadJob.id.desc())
-    )
-    if existing_job is not None:
-        return _serialize_upload_job(existing_job)
+        if existing_job is not None:
+            return _serialize_upload_job(existing_job)
 
     queue_filename = _save_upload_queue_file(saved_name, saved_bytes)
     job = UploadJob(
