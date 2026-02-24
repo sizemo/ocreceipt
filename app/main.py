@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import io
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ import time
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PIL import Image, ImageOps
 
@@ -18,6 +20,7 @@ from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException,
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import and_, delete, func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -25,11 +28,13 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .auth import create_session, delete_session, get_user_by_session_token, hash_api_token, hash_password, verify_password
 from .database import Base, engine, get_db
-from .models import ApiToken, InstanceSetting, Merchant, Receipt, ReceiptImage, UploadJob, User, UserSession
+from .models import ApiToken, InstanceSetting, LoginRateLimit, Merchant, Receipt, ReceiptImage, UploadJob, User, UserSession
 from .ocr import extract_receipt_fields, get_pdf_page_count, render_pdf_preview_image, run_ocr, run_ocr_pdf, write_ocr_debug_report
 from .schemas import (
+    BootstrapAdminRequest,
     InstanceResetRequest,
     LoginRequest,
+    PasswordChangeRequest,
     UploadJobOut,
     ReceiptOut,
     ReceiptReviewUpdate,
@@ -45,6 +50,8 @@ from .schemas import (
     ThemeUpdate,
 )
 
+logger = logging.getLogger("ocreceipt.security")
+
 app = FastAPI(title="Receipt OCR API", version="1.0.0")
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", str(Path(__file__).parent / "uploads")))
@@ -56,8 +63,6 @@ SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "strict").strip()
 FORCE_HTTPS = os.getenv("FORCE_HTTPS", "false").lower() == "true"
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
 PROXY_TRUSTED_HOSTS = os.getenv("PROXY_TRUSTED_HOSTS", "127.0.0.1,::1")
-DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
-DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "change-me-now")
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.getenv("LOGIN_RATE_LIMIT_ATTEMPTS", "8"))
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300"))
 LOGIN_RATE_LIMIT_BLOCK_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_BLOCK_SECONDS", "900"))
@@ -66,9 +71,15 @@ OCR_RETRY_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_RETRY_CONFIDENCE_THRESHOLD
 OCR_RETRY_FULL_MODE_ENABLED = os.getenv("OCR_RETRY_FULL_MODE_ENABLED", "false").strip().lower() == "true"
 OCR_JOB_TIMEOUT_SEC = int(os.getenv("OCR_JOB_TIMEOUT_SEC", "120"))
 UPLOAD_DEDUPE_WINDOW_SECONDS = int(os.getenv("UPLOAD_DEDUPE_WINDOW_SECONDS", "900"))
-OCR_DEBUG_ON_LOW_CONFIDENCE = os.getenv("OCR_DEBUG_ON_LOW_CONFIDENCE", "true").strip().lower() == "true"
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024)))
+OCR_DEBUG_ON_LOW_CONFIDENCE = os.getenv("OCR_DEBUG_ON_LOW_CONFIDENCE", "false").strip().lower() == "true"
+OCR_DEBUG_RETENTION_DAYS = int(os.getenv("OCR_DEBUG_RETENTION_DAYS", "7"))
 OCR_DEBUG_DIR = Path(os.getenv("OCR_DEBUG_DIR", str(UPLOADS_DIR / "debug")))
 OCR_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    OCR_DEBUG_DIR.chmod(0o700)
+except Exception:
+    pass
 
 if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     SESSION_COOKIE_SAMESITE = "strict"
@@ -76,9 +87,6 @@ if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
 if SESSION_COOKIE_SAMESITE == "none" and not SESSION_COOKIE_SECURE:
     raise RuntimeError("SESSION_COOKIE_SAMESITE=none requires SESSION_COOKIE_SECURE=true")
 
-_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
-_LOGIN_BLOCKED_UNTIL: dict[str, float] = {}
-_LOGIN_LOCK = threading.Lock()
 _UPLOAD_QUEUE: list[int] = []
 _UPLOAD_QUEUE_LOCK = threading.Lock()
 _UPLOAD_QUEUE_COND = threading.Condition(_UPLOAD_QUEUE_LOCK)
@@ -126,10 +134,38 @@ def health_check():
     return {"status": "ok"}
 
 
+def _enforce_same_origin_request(request: Request) -> None:
+    if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+
+    host = (request.headers.get("host") or "").strip().lower()
+    if not host:
+        raise HTTPException(status_code=403, detail="Missing host header")
+    expected_origin = f"{request.url.scheme}://{host}".rstrip("/")
+
+    origin = (request.headers.get("origin") or "").strip().lower().rstrip("/")
+    if origin:
+        if origin != expected_origin:
+            raise HTTPException(status_code=403, detail="Cross-site request blocked")
+        return
+
+    referer = (request.headers.get("referer") or "").strip()
+    if referer:
+        parsed = urlparse(referer)
+        referer_origin = f"{parsed.scheme}://{parsed.netloc}".lower().rstrip("/")
+        if referer_origin != expected_origin:
+            raise HTTPException(status_code=403, detail="Cross-site request blocked")
+        return
+
+    raise HTTPException(status_code=403, detail="Missing origin header")
+
+
 def get_current_user(
+    request: Request,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     db: Session = Depends(get_db),
 ) -> User:
+    _enforce_same_origin_request(request)
     user = get_user_by_session_token(db, session_token)
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -167,6 +203,7 @@ def _get_user_from_upload_token(db: Session, raw_token: str) -> User | None:
 
 
 def require_upload_auth(
+    request: Request,
     authorization: str | None = Header(default=None),
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     db: Session = Depends(get_db),
@@ -174,6 +211,7 @@ def require_upload_auth(
     # Prefer normal cookie session when present.
     user = get_user_by_session_token(db, session_token) if session_token else None
     if user is not None:
+        _enforce_same_origin_request(request)
         if user.role != 'admin':
             raise HTTPException(status_code=403, detail='Admin required')
         return user
@@ -200,14 +238,63 @@ def require_upload_auth(
 def login(payload: LoginRequest, response: Response, request: Request, db: Session = Depends(get_db)):
     username = payload.username.strip().lower()
     throttle_key = f"{_get_client_ip(request)}:{username}"
-    _enforce_login_rate_limit(throttle_key)
+    _enforce_login_rate_limit(db, throttle_key)
 
     user = db.scalar(select(User).where(func.lower(User.username) == username, User.is_active == True))
     if user is None or not verify_password(payload.password, user.password_salt, user.password_hash):
-        _record_failed_login(throttle_key)
+        _record_failed_login(db, throttle_key)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    _clear_failed_login(throttle_key)
+    _clear_failed_login(db, throttle_key)
+    session_token = create_session(db, user.id)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        samesite=SESSION_COOKIE_SAMESITE,
+        secure=SESSION_COOKIE_SECURE,
+        path="/",
+    )
+    return {"id": user.id, "username": user.username, "role": user.role}
+
+
+@app.get("/auth/bootstrap-status")
+def auth_bootstrap_status(db: Session = Depends(get_db)):
+    has_any_user = db.scalar(select(User.id).limit(1)) is not None
+    return {"requires_setup": not has_any_user}
+
+
+@app.post("/auth/bootstrap-admin")
+def auth_bootstrap_admin(payload: BootstrapAdminRequest, response: Response, db: Session = Depends(get_db)):
+    has_any_user = db.scalar(select(User.id).limit(1)) is not None
+    if has_any_user:
+        raise HTTPException(status_code=409, detail="Initial setup is already complete")
+
+    username = payload.username.strip().lower()
+    if not re.match(r"^[a-z0-9_.-]{3,120}$", username):
+        raise HTTPException(status_code=400, detail="Username must be 3-120 chars: a-z, 0-9, _, ., -")
+
+    try:
+        salt, digest = hash_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    user = User(
+        username=username,
+        password_salt=salt,
+        password_hash=digest,
+        role="admin",
+        is_active=True,
+        must_change_password=False,
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Initial setup is already complete")
+    db.refresh(user)
+
     session_token = create_session(db, user.id)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -222,10 +309,13 @@ def login(payload: LoginRequest, response: Response, request: Request, db: Sessi
 
 @app.post("/auth/logout")
 def logout(
+    request: Request,
     response: Response,
     session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     db: Session = Depends(get_db),
 ):
+    if session_token:
+        _enforce_same_origin_request(request)
     delete_session(db, session_token)
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return {"status": "ok"}
@@ -244,6 +334,24 @@ def auth_me(user: User = Depends(get_current_user), db: Session = Depends(get_db
     }
 
 
+@app.post("/auth/change-password")
+def change_password(payload: PasswordChangeRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not verify_password(payload.current_password, user.password_salt, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="New password must be different")
+    try:
+        salt, digest = hash_password(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    user.password_salt = salt
+    user.password_hash = digest
+    user.must_change_password = False
+    db.add(user)
+    db.commit()
+    return {"status": "password_changed"}
+
+
 @app.on_event("startup")
 def _start_upload_worker() -> None:
     global _UPLOAD_WORKER_THREAD
@@ -255,6 +363,7 @@ def _start_upload_worker() -> None:
     _UPLOAD_WORKER_THREAD.start()
     _clear_stale_processing_jobs()
     _requeue_incomplete_upload_jobs()
+    _cleanup_old_ocr_debug_artifacts()
 
 
 @app.on_event("shutdown")
@@ -291,7 +400,17 @@ def get_settings(_: User = Depends(get_current_user), db: Session = Depends(get_
 
 
 @app.post("/receipts/upload", response_model=UploadJobOut, status_code=202)
-async def upload_receipt(file: UploadFile = File(...), force_reprocess: bool = Form(False), db: Session = Depends(get_db), user: User = Depends(require_upload_auth)):
+async def upload_receipt(
+    request: Request,
+    file: UploadFile = File(...),
+    force_reprocess: bool = Form(False),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_upload_auth),
+):
+    raw_content_length = (request.headers.get("content-length") or "").strip()
+    if raw_content_length.isdigit() and int(raw_content_length) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Upload too large (max {MAX_UPLOAD_BYTES} bytes)")
+
     content_type = (file.content_type or "").lower()
     original_name = file.filename or "receipt"
     is_pdf = content_type == "application/pdf" or Path(original_name).suffix.lower() == ".pdf"
@@ -303,6 +422,8 @@ async def upload_receipt(file: UploadFile = File(...), force_reprocess: bool = F
     uploaded_bytes = await file.read()
     if not uploaded_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(uploaded_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Upload too large (max {MAX_UPLOAD_BYTES} bytes)")
 
     if is_pdf:
         saved_bytes = uploaded_bytes
@@ -757,7 +878,10 @@ def admin_create_user(payload: UserCreate, db: Session = Depends(get_db), _: Use
     if exists is not None:
         raise HTTPException(status_code=409, detail="Username already exists")
 
-    salt, digest = hash_password(payload.password)
+    try:
+        salt, digest = hash_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     user = User(username=username, password_salt=salt, password_hash=digest, role=role, is_active=True)
     db.add(user)
     db.commit()
@@ -791,7 +915,10 @@ def admin_update_user_password(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
-    salt, digest = hash_password(payload.password)
+    try:
+        salt, digest = hash_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     user.password_salt = salt
     user.password_hash = digest
     db.commit()
@@ -901,6 +1028,10 @@ def _write_upload_debug_artifacts(job_id: int, payload: bytes, extracted: dict, 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     folder = OCR_DEBUG_DIR / f"job_{job_id}_{stamp}"
     folder.mkdir(parents=True, exist_ok=True)
+    try:
+        folder.chmod(0o700)
+    except Exception:
+        pass
 
     ext = Path(original_filename or "").suffix.lower()
     if not ext or len(ext) > 8:
@@ -908,6 +1039,10 @@ def _write_upload_debug_artifacts(job_id: int, payload: bytes, extracted: dict, 
 
     original_path = folder / f"{safe_name}{ext}"
     original_path.write_bytes(payload)
+    try:
+        original_path.chmod(0o600)
+    except Exception:
+        pass
 
     report = {
         "job_id": job_id,
@@ -916,6 +1051,33 @@ def _write_upload_debug_artifacts(job_id: int, payload: bytes, extracted: dict, 
         "extracted": extracted,
     }
     write_ocr_debug_report(str(folder / "ocr_debug_report.json"), report)
+    try:
+        (folder / "ocr_debug_report.json").chmod(0o600)
+    except Exception:
+        pass
+
+
+def _cleanup_old_ocr_debug_artifacts() -> None:
+    if OCR_DEBUG_RETENTION_DAYS < 0:
+        return
+    if not OCR_DEBUG_DIR.exists():
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=OCR_DEBUG_RETENTION_DAYS)
+    for entry in OCR_DEBUG_DIR.iterdir():
+        try:
+            mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+        except Exception:
+            continue
+        if mtime >= cutoff:
+            continue
+        try:
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            elif entry.is_file():
+                entry.unlink(missing_ok=True)
+        except Exception:
+            continue
 
 
 def _normalize_merchant(value: str | None) -> str | None:
@@ -1193,6 +1355,7 @@ def _ensure_schema() -> None:
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS extraction_confidence NUMERIC(5,2)"))
         conn.execute(text("ALTER TABLE receipts ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE"))
         conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preference TEXT"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE"))
         conn.execute(text("ALTER TABLE instance_settings ADD COLUMN IF NOT EXISTS visual_accessibility_enabled BOOLEAN NOT NULL DEFAULT TRUE"))
         conn.execute(text("ALTER TABLE upload_jobs ADD COLUMN IF NOT EXISTS file_sha256 TEXT"))
 
@@ -1212,29 +1375,17 @@ def _ensure_default_settings() -> None:
         _get_or_create_settings(db)
 
 
-def _ensure_bootstrap_admin() -> None:
-    with Session(bind=engine) as db:
-        existing_admin = db.scalar(select(User.id).where(User.role == "admin"))
-        if existing_admin is not None:
-            return
-
-        weak_password = DEFAULT_ADMIN_PASSWORD in {"change-me-now", "password", "admin", "admin123"}
-        if weak_password or len(DEFAULT_ADMIN_PASSWORD) < 12:
-            raise RuntimeError(
-                "Refusing bootstrap admin with weak DEFAULT_ADMIN_PASSWORD. "
-                "Set a strong value (12+ chars) via environment."
-            )
-
-        salt, digest = hash_password(DEFAULT_ADMIN_PASSWORD)
-        admin = User(
-            username=DEFAULT_ADMIN_USERNAME.strip().lower(),
-            password_salt=salt,
-            password_hash=digest,
-            role="admin",
-            is_active=True,
-        )
-        db.add(admin)
-        db.commit()
+def _warn_insecure_selfhost_config() -> None:
+    if not FORCE_HTTPS:
+        logger.warning("FORCE_HTTPS is disabled. Use only behind trusted local networks or enable TLS via reverse proxy.")
+    if not SESSION_COOKIE_SECURE:
+        logger.warning("SESSION_COOKIE_SECURE is disabled. Session cookies may be sent over plaintext HTTP.")
+    if OCR_DEBUG_ON_LOW_CONFIDENCE:
+        logger.warning("OCR_DEBUG_ON_LOW_CONFIDENCE is enabled. Uploaded receipt artifacts may be written to disk.")
+    if OCR_DEBUG_RETENTION_DAYS < 0:
+        logger.warning("OCR_DEBUG_RETENTION_DAYS is negative. Debug artifacts will never be cleaned automatically.")
+    if MAX_UPLOAD_BYTES > 50 * 1024 * 1024:
+        logger.warning("MAX_UPLOAD_BYTES exceeds 50MB. Consider lowering to reduce memory/DOS exposure.")
 
 
 def _get_client_ip(request: Request) -> str:
@@ -1243,41 +1394,84 @@ def _get_client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _enforce_login_rate_limit(key: str) -> None:
-    now = time.time()
-    with _LOGIN_LOCK:
-        blocked_until = _LOGIN_BLOCKED_UNTIL.get(key)
-        if blocked_until and blocked_until > now:
-            retry_after = max(1, int(blocked_until - now))
-            raise HTTPException(
-                status_code=429,
-                detail=f"Too many login attempts. Retry in {retry_after} seconds.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        if blocked_until and blocked_until <= now:
-            _LOGIN_BLOCKED_UNTIL.pop(key, None)
-
-        attempts = [ts for ts in _LOGIN_ATTEMPTS.get(key, []) if now - ts <= LOGIN_RATE_LIMIT_WINDOW_SECONDS]
-        _LOGIN_ATTEMPTS[key] = attempts
+def _utc_or_none(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
-def _record_failed_login(key: str) -> None:
-    now = time.time()
-    with _LOGIN_LOCK:
-        attempts = [ts for ts in _LOGIN_ATTEMPTS.get(key, []) if now - ts <= LOGIN_RATE_LIMIT_WINDOW_SECONDS]
-        attempts.append(now)
-        _LOGIN_ATTEMPTS[key] = attempts
-        if len(attempts) >= LOGIN_RATE_LIMIT_ATTEMPTS:
-            _LOGIN_BLOCKED_UNTIL[key] = now + LOGIN_RATE_LIMIT_BLOCK_SECONDS
-            _LOGIN_ATTEMPTS[key] = []
+def _get_login_rate_limit_row(db: Session, key: str) -> LoginRateLimit:
+    row = db.scalar(select(LoginRateLimit).where(LoginRateLimit.key == key).with_for_update())
+    if row is not None:
+        return row
+    row = LoginRateLimit(key=key, attempts=0, window_started_at=datetime.now(timezone.utc))
+    db.add(row)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        row = db.scalar(select(LoginRateLimit).where(LoginRateLimit.key == key).with_for_update())
+        if row is None:
+            raise
+    return row
 
 
-def _clear_failed_login(key: str) -> None:
-    with _LOGIN_LOCK:
-        _LOGIN_ATTEMPTS.pop(key, None)
-        _LOGIN_BLOCKED_UNTIL.pop(key, None)
+def _enforce_login_rate_limit(db: Session, key: str) -> None:
+    now = datetime.now(timezone.utc)
+    row = _get_login_rate_limit_row(db, key)
+
+    blocked_until = _utc_or_none(row.blocked_until)
+    if blocked_until and blocked_until > now:
+        retry_after = max(1, int((blocked_until - now).total_seconds()))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts. Retry in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if blocked_until and blocked_until <= now:
+        row.blocked_until = None
+
+    window_started = _utc_or_none(row.window_started_at)
+    if window_started is None or now - window_started > timedelta(seconds=LOGIN_RATE_LIMIT_WINDOW_SECONDS):
+        row.attempts = 0
+        row.window_started_at = now
+
+    db.add(row)
+    db.commit()
+
+
+def _record_failed_login(db: Session, key: str) -> None:
+    now = datetime.now(timezone.utc)
+    row = _get_login_rate_limit_row(db, key)
+
+    window_started = _utc_or_none(row.window_started_at)
+    if window_started is None or now - window_started > timedelta(seconds=LOGIN_RATE_LIMIT_WINDOW_SECONDS):
+        row.attempts = 0
+        row.window_started_at = now
+
+    row.attempts = int(row.attempts or 0) + 1
+    if row.attempts >= LOGIN_RATE_LIMIT_ATTEMPTS:
+        row.blocked_until = now + timedelta(seconds=LOGIN_RATE_LIMIT_BLOCK_SECONDS)
+        row.attempts = 0
+        row.window_started_at = now
+
+    db.add(row)
+    db.commit()
+
+
+def _clear_failed_login(db: Session, key: str) -> None:
+    row = db.scalar(select(LoginRateLimit).where(LoginRateLimit.key == key).with_for_update())
+    if row is None:
+        return
+    row.attempts = 0
+    row.blocked_until = None
+    row.window_started_at = datetime.now(timezone.utc)
+    db.add(row)
+    db.commit()
 
 
 _ensure_schema()
 _ensure_default_settings()
-_ensure_bootstrap_admin()
+_warn_insecure_selfhost_config()

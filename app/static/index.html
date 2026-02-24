@@ -24,7 +24,7 @@
       </section>
       <section id="auth-section" class="card auth-card" hidden>
         <h1>OCReceipt</h1>
-        <p>Sign in to access your instance.</p>
+        <p id="auth-subtitle">Sign in to access your instance.</p>
         <form id="login-form" class="auth-form" autocomplete="off" novalidate>
           <label>
             Username
@@ -38,6 +38,27 @@
 </div>
           </label>
           <button id="login-btn" type="submit">Sign in</button>
+        </form>
+        <form id="setup-form" class="auth-form" autocomplete="off" novalidate hidden>
+          <label>
+            Create Admin Username
+            <input id="setup-username" type="text" required minlength="3" maxlength="120" />
+          </label>
+          <label>
+            Create Admin Password
+            <div class="password-field">
+              <input id="setup-password" type="password" required minlength="12" />
+              <button type="button" class="password-toggle secondary" data-toggle-password data-target="setup-password" aria-pressed="false">Show</button>
+            </div>
+          </label>
+          <label>
+            Confirm Admin Password
+            <div class="password-field">
+              <input id="setup-password-confirm" type="password" required minlength="12" />
+              <button type="button" class="password-toggle secondary" data-toggle-password data-target="setup-password-confirm" aria-pressed="false">Show</button>
+            </div>
+          </label>
+          <button id="setup-btn" type="submit">Create admin account</button>
         </form>
         <small id="auth-error" class="err-text" role="alert" aria-live="assertive"></small>
       </section>

@@ -45,6 +45,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class BootstrapAdminRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class UserOut(BaseModel):
     id: int
     username: str
@@ -55,12 +65,12 @@ class UserOut(BaseModel):
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=8, max_length=256)
+    password: str = Field(min_length=12, max_length=256)
     role: str
 
 
 class UserPasswordUpdate(BaseModel):
-    password: str = Field(min_length=8, max_length=256)
+    password: str = Field(min_length=12, max_length=256)
 
 class ApiTokenCreate(BaseModel):
     name: str = Field(min_length=3, max_length=120)

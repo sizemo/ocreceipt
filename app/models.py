@@ -78,6 +78,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False, server_default="view")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     theme_preference: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -90,6 +91,16 @@ class UserSession(Base):
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
     expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LoginRateLimit(Base):
+    __tablename__ = "login_rate_limits"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    window_started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blocked_until: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class InstanceSetting(Base):

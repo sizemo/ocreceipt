@@ -4,6 +4,11 @@ const bootSkeleton = document.getElementById("boot-skeleton");
 const loginForm = document.getElementById("login-form");
 const loginUsernameInput = document.getElementById("login-username");
 const loginPasswordInput = document.getElementById("login-password");
+const setupForm = document.getElementById("setup-form");
+const setupUsernameInput = document.getElementById("setup-username");
+const setupPasswordInput = document.getElementById("setup-password");
+const setupPasswordConfirmInput = document.getElementById("setup-password-confirm");
+const authSubtitle = document.getElementById("auth-subtitle");
 const authError = document.getElementById("auth-error");
 const sessionLabel = document.getElementById("session-label");
 
@@ -61,6 +66,7 @@ let merchantSearchAbort = null;
 let currentUser = null;
 let defaultCurrency = "USD";
 let debugModeEnabled = false;
+let requiresInitialSetup = false;
 
 let sortState = { key: "created_at", dir: "desc" };
 let currentEditRow = null;
@@ -232,6 +238,28 @@ async function apiFetch(url, options = {}) {
   return response;
 }
 
+function setAuthMode(setupMode) {
+  requiresInitialSetup = !!setupMode;
+  if (loginForm) loginForm.hidden = requiresInitialSetup;
+  if (setupForm) setupForm.hidden = !requiresInitialSetup;
+  if (authSubtitle) {
+    authSubtitle.textContent = requiresInitialSetup
+      ? "Create your first admin account to initialize this instance."
+      : "Sign in to access your instance.";
+  }
+}
+
+async function refreshBootstrapStatus() {
+  try {
+    const response = await fetch("/auth/bootstrap-status");
+    if (!response.ok) return;
+    const payload = await response.json().catch(() => ({}));
+    setAuthMode(!!payload.requires_setup);
+  } catch {
+    // Keep current auth mode if bootstrap check fails.
+  }
+}
+
 function showAuthOnly() {
   currentUser = null;
   setDebugMode(getSavedDebugModeValue(), { persist: false });
@@ -239,6 +267,7 @@ function showAuthOnly() {
   authSection.hidden = false;
   appShell.hidden = true;
   authError.textContent = "";
+  refreshBootstrapStatus();
   closeMenu();
 }
 
@@ -293,7 +322,7 @@ function bindInvalidClear(input) {
   input.addEventListener("input", () => setFieldInvalid(input, false));
 }
 
-[loginUsernameInput, loginPasswordInput].forEach(bindInvalidClear);
+[loginUsernameInput, loginPasswordInput, setupUsernameInput, setupPasswordInput, setupPasswordConfirmInput].forEach(bindInvalidClear);
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -335,6 +364,57 @@ loginForm.addEventListener("submit", async (event) => {
       : "Login succeeded but your session could not be established. Check reverse proxy forwarded headers and cookie settings.";
   }
 });
+
+if (setupForm) {
+  setupForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    authError.textContent = "";
+
+    if (!setupUsernameInput || !setupPasswordInput || !setupPasswordConfirmInput) return;
+
+    setFieldInvalid(setupUsernameInput, false);
+    setFieldInvalid(setupPasswordInput, false);
+    setFieldInvalid(setupPasswordConfirmInput, false);
+
+    const username = setupUsernameInput.value.trim().toLowerCase();
+    const password = setupPasswordInput.value;
+    const confirm = setupPasswordConfirmInput.value;
+
+    if (!username || !password || !confirm) {
+      setFieldInvalid(setupUsernameInput, !username);
+      setFieldInvalid(setupPasswordInput, !password);
+      setFieldInvalid(setupPasswordConfirmInput, !confirm);
+      authError.textContent = "All fields are required.";
+      return;
+    }
+    if (password.length < 12) {
+      setFieldInvalid(setupPasswordInput, true);
+      authError.textContent = "Password must be at least 12 characters.";
+      return;
+    }
+    if (password !== confirm) {
+      setFieldInvalid(setupPasswordConfirmInput, true);
+      authError.textContent = "Password confirmation does not match.";
+      return;
+    }
+
+    const response = await fetch("/auth/bootstrap-admin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      authError.textContent = data.detail || "Setup failed";
+      await refreshBootstrapStatus();
+      return;
+    }
+
+    setupPasswordInput.value = "";
+    setupPasswordConfirmInput.value = "";
+    await initializeAuthenticatedApp();
+  });
+}
 
 logoutBtn.addEventListener("click", async () => {
   try {

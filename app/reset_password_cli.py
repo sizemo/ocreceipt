@@ -3,7 +3,7 @@ import sys
 
 from sqlalchemy import delete, select
 
-from .auth import hash_password
+from .auth import MIN_PASSWORD_LENGTH, hash_password
 from .database import SessionLocal
 from .models import User, UserSession
 
@@ -31,8 +31,8 @@ def main() -> int:
     new_password = args.password or (_read_password_from_stdin() if args.stdin else "")
     if not new_password:
         raise SystemExit("New password cannot be empty. Use --stdin or --password.")
-    if len(new_password) < 12:
-        raise SystemExit("New password must be at least 12 characters.")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise SystemExit(f"New password must be at least {MIN_PASSWORD_LENGTH} characters.")
 
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.username == args.username))
