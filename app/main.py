@@ -152,7 +152,12 @@ def _enforce_same_origin_request(request: Request) -> None:
     host = (request.headers.get("host") or "").strip().lower()
     if not host:
         raise HTTPException(status_code=403, detail="Missing host header")
-    expected_origin = f"{request.url.scheme}://{host}".rstrip("/")
+
+    # Respect reverse proxy protocol
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    scheme = (forwarded_proto or request.url.scheme).lower()
+
+    expected_origin = f"{scheme}://{host}".rstrip("/")
 
     origin = (request.headers.get("origin") or "").strip().lower().rstrip("/")
     if origin:
