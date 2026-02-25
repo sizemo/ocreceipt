@@ -19,6 +19,7 @@ from PIL import Image, ImageOps
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -53,6 +54,16 @@ from .schemas import (
 logger = logging.getLogger("ocreceipt.security")
 
 app = FastAPI(title="Receipt OCR API", version="1.0.0")
+# Allow browser uploads from your frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://receipts.sizemo.cloud",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 STATIC_DIR = Path(__file__).parent / "static"
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", str(Path(__file__).parent / "uploads")))
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
